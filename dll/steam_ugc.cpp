@@ -17,7 +17,7 @@
 
 #include "dll/steam_ugc.h"
 
-UGCQueryHandle_t Steam_UGC::new_ugc_query(bool return_all_subscribed, std::set<PublishedFileId_t> return_only)
+UGCQueryHandle_t Steam_UGC::new_ugc_query(EQueryType query_type, bool return_all_subscribed, uint32 page, bool next_cursor, const std::set<PublishedFileId_t> &return_only)
 {
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     
@@ -27,9 +27,12 @@ UGCQueryHandle_t Steam_UGC::new_ugc_query(bool return_all_subscribed, std::set<P
     struct UGC_query query{};
     query.handle = handle;
     query.return_all_subscribed = return_all_subscribed;
+    query.page = page;
+    query.next_cursor = next_cursor;
+    query.query_type = query_type;
     query.return_only = return_only;
     ugc_queries.push_back(query);
-    PRINT_DEBUG("handle = %llu", query.handle);
+    PRINT_DEBUG("new request handle = %llu", query.handle);
     return query.handle;
 }
 
@@ -48,28 +51,32 @@ std::optional<Mod_entry> Steam_UGC::get_query_ugc(UGCQueryHandle_t handle, uint3
     return settings->getMod(file_id);
 }
 
-std::optional<std::vector<std::string>> Steam_UGC::get_query_ugc_tags(UGCQueryHandle_t handle, uint32 index)
+std::vector<std::string> Steam_UGC::get_query_ugc_tags(UGCQueryHandle_t handle, uint32 index)
 {
     auto res = get_query_ugc(handle, index);
-    if (!res.has_value()) return std::nullopt;
+    if (!res.has_value()) return {};
+
+    std::string tmp = res.value().tags;
 
     auto tags_tokens = std::vector<std::string>{};
-    std::stringstream ss(res.value().tags);
-    std::string tmp{};
-    while(ss >> tmp) {
-        if (tmp.back() == ',') tmp = tmp.substr(0, tmp.size() - 1);
-        tags_tokens.push_back(tmp);
+    size_t start = 0;
+    while (true) {
+        auto end = tmp.find(',', start);
+        if (end == std::string::npos) break;
+
+        tags_tokens.push_back(tmp.substr(start, end - start));
+        start = end + 1;
     }
+
+    tags_tokens.push_back(tmp.substr(start));
 
     return tags_tokens;
 
 }
 
-void Steam_UGC::set_details(PublishedFileId_t id, SteamUGCDetails_t *pDetails)
+void Steam_UGC::set_details(PublishedFileId_t id, SteamUGCDetails_t *pDetails, IUgcItfVersion ver)
 {
     if (pDetails) {
-        memset(pDetails, 0, sizeof(SteamUGCDetails_t));
-
         pDetails->m_nPublishedFileId = id;
 
         if (settings->isModInstalled(id)) {
@@ -90,24 +97,37 @@ void Steam_UGC::set_details(PublishedFileId_t id, SteamUGCDetails_t *pDetails)
             pDetails->m_nPreviewFileSize = mod.previewFileSize;
             pDetails->m_rtimeCreated = mod.timeCreated;
             pDetails->m_rtimeUpdated = mod.timeUpdated;
-            pDetails->m_ulSteamIDOwner = settings->get_local_steam_id().ConvertToUint64();
+            pDetails->m_ulSteamIDOwner = mod.steamIDOwner;
 
             pDetails->m_rtimeAddedToUserList = mod.timeAddedToUserList;
             pDetails->m_unVotesUp = mod.votesUp;
             pDetails->m_unVotesDown = mod.votesDown;
             pDetails->m_flScore = mod.score;
 
-            mod.primaryFileName.copy(pDetails->m_pchFileName, sizeof(pDetails->m_pchFileName) - 1);
-            mod.description.copy(pDetails->m_rgchDescription, sizeof(pDetails->m_rgchDescription) - 1);
-            mod.tags.copy(pDetails->m_rgchTags, sizeof(pDetails->m_rgchTags) - 1);
-            mod.title.copy(pDetails->m_rgchTitle, sizeof(pDetails->m_rgchTitle) - 1);
-            mod.workshopItemURL.copy(pDetails->m_rgchURL, sizeof(pDetails->m_rgchURL) - 1);
+            // real steamclient64.dll may set this to null! (ex: item id 3366485326)
+            auto copied_chars = mod.primaryFileName.copy(pDetails->m_pchFileName, sizeof(pDetails->m_pchFileName) - 1);
+            pDetails->m_pchFileName[copied_chars] = 0;
+
+            copied_chars = mod.description.copy(pDetails->m_rgchDescription, sizeof(pDetails->m_rgchDescription) - 1);
+            pDetails->m_rgchDescription[copied_chars] = 0;
+
+            copied_chars = mod.tags.copy(pDetails->m_rgchTags, sizeof(pDetails->m_rgchTags) - 1);
+            pDetails->m_rgchTags[copied_chars] = 0;
+
+            copied_chars = mod.title.copy(pDetails->m_rgchTitle, sizeof(pDetails->m_rgchTitle) - 1);
+            pDetails->m_rgchTitle[copied_chars] = 0;
+
+            // real steamclient64.dll may set this to null! (ex: item id 3366485326)
+            copied_chars = mod.workshopItemURL.copy(pDetails->m_rgchURL, sizeof(pDetails->m_rgchURL) - 1);
+            pDetails->m_rgchURL[copied_chars] = 0;
 
             // TODO should we enable this?
             // pDetails->m_unNumChildren = mod.numChildren;
 
-            // TODO make sure the filesize is good
-            pDetails->m_ulTotalFilesSize = mod.total_files_sizes;
+            if (ver >= IUgcItfVersion::v020) {
+                // TODO make sure the filesize is good
+                pDetails->m_ulTotalFilesSize = mod.total_files_sizes;
+            }
         } else {
             PRINT_DEBUG("  mod isn't installed, returning failure");
             pDetails->m_eResult = k_EResultFail;
@@ -151,6 +171,63 @@ bool Steam_UGC::write_ugc_favorites()
     return (size_t)stored == file_data.size();
 }
 
+bool Steam_UGC::internal_GetQueryUGCResult( UGCQueryHandle_t handle, uint32 index, SteamUGCDetails_t *pDetails, IUgcItfVersion ver )
+{
+    PRINT_DEBUG("%llu [%u] %p <%u>", handle, index, pDetails, (unsigned)ver);
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+
+    // some apps (like appid 588650) ignore the return of this function, especially for builtin mods
+    if (pDetails) {
+        pDetails->m_nPublishedFileId = k_PublishedFileIdInvalid;
+        pDetails->m_eResult = k_EResultFail;
+        pDetails->m_bAcceptedForUse = false;
+        pDetails->m_hFile = k_UGCHandleInvalid;
+        pDetails->m_hPreviewFile = k_UGCHandleInvalid;
+        pDetails->m_unNumChildren = 0;
+    }
+
+    if (handle == k_UGCQueryHandleInvalid) return false;
+
+    auto request = std::find_if(ugc_queries.begin(), ugc_queries.end(), [&handle](struct UGC_query const& item) { return item.handle == handle; });
+    if (ugc_queries.end() == request) {
+        return false;
+    }
+
+    if (index >= request->results.size()) {
+        return false;
+    }
+
+    auto it = request->results.begin();
+    std::advance(it, index);
+    PublishedFileId_t file_id = *it;
+    set_details(file_id, pDetails, ver);
+    return true;
+}
+
+SteamAPICall_t Steam_UGC::internal_RequestUGCDetails( PublishedFileId_t nPublishedFileID, uint32 unMaxAgeSeconds, IUgcItfVersion ver )
+{
+    PRINT_DEBUG("%llu %u <%u>", nPublishedFileID, unMaxAgeSeconds, (unsigned)ver);
+    std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    
+    if (ver <= IUgcItfVersion::v018) { // <= SDK 1.59
+        SteamUGCRequestUGCDetailsResult018_t data{};
+        data.m_bCachedData = false;
+        set_details(nPublishedFileID, reinterpret_cast<SteamUGCDetails_t *>(&data.m_details), ver);
+        
+        auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+        callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+        return ret;
+    } else { // >= SDK 1.60
+        SteamUGCRequestUGCDetailsResult_t data{};
+        data.m_bCachedData = false;
+        set_details(nPublishedFileID, &data.m_details, ver);
+        
+        auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+        callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+        return ret;
+    }
+}
+
 
 Steam_UGC::Steam_UGC(class Settings *settings, class Ugc_Remote_Storage_Bridge *ugc_bridge, class Local_Storage *local_storage, class SteamCallResults *callback_results, class SteamCallBacks *callbacks)
 {
@@ -176,14 +253,14 @@ UGCQueryHandle_t Steam_UGC::CreateQueryUserUGCRequest( AccountID_t unAccountID, 
     if (unAccountID != settings->get_local_steam_id().GetAccountID()) return k_UGCQueryHandleInvalid;
     
     // TODO
-    return new_ugc_query(eListType == k_EUserUGCList_Subscribed || eListType == k_EUserUGCList_Published);
+    return new_ugc_query(eUserUGCRequest, eListType == k_EUserUGCList_Subscribed || eListType == k_EUserUGCList_Published, unPage);
 }
 
 
 // Query for all matching UGC. Creator app id or consumer app id must be valid and be set to the current running app. unPage should start at 1.
 UGCQueryHandle_t Steam_UGC::CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, uint32 unPage )
 {
-    PRINT_DEBUG_ENTRY();
+    PRINT_DEBUG("page");
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     
     if (nCreatorAppID != settings->get_local_game_id().AppID() || nConsumerAppID != settings->get_local_game_id().AppID()) return k_UGCQueryHandleInvalid;
@@ -191,20 +268,42 @@ UGCQueryHandle_t Steam_UGC::CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGC
     if (eQueryType < 0) return k_UGCQueryHandleInvalid;
     
     // TODO
-    return new_ugc_query();
+    return new_ugc_query(eAllUGCRequestPage, true, unPage);
 }
 
 // Query for all matching UGC using the new deep paging interface. Creator app id or consumer app id must be valid and be set to the current running app. pchCursor should be set to NULL or "*" to get the first result set.
 UGCQueryHandle_t Steam_UGC::CreateQueryAllUGCRequest( EUGCQuery eQueryType, EUGCMatchingUGCType eMatchingeMatchingUGCTypeFileType, AppId_t nCreatorAppID, AppId_t nConsumerAppID, const char *pchCursor )
 {
-    PRINT_DEBUG("other");
+    PRINT_DEBUG("cursor");
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     
     if (nCreatorAppID != settings->get_local_game_id().AppID() || nConsumerAppID != settings->get_local_game_id().AppID()) return k_UGCQueryHandleInvalid;
     if (eQueryType < 0) return k_UGCQueryHandleInvalid;
     
+    // TODO: totally don't know what does pchCursor mean, we currently emu it to be a string of page number instead
+    uint32 page = 0;
+    bool next_cursor = true;
+    std::string cursor = pchCursor != NULL ? std::string(pchCursor) : std::string("*");
+
+    try {
+        if (cursor == std::string("*")) {
+            page = 1;
+        }
+        else if (cursor == std::string("")) {
+            page = 1;            // Tested on real steam, "" is a valid cursor, which seems to be always page 1.
+            next_cursor = false; // However, under this condition, next cursor will still be "", so we flag it here
+        }
+        else {
+            page = std::stoul(cursor);
+        }
+    }
+    catch (const std::exception &e) {
+        PRINT_DEBUG("Conversion error, reason: %s. Is this a valid cursor?", e.what());
+        page = 0;
+    }
+
     // TODO
-    return new_ugc_query();
+    return new_ugc_query(eAllUGCRequestCursor, true, page, next_cursor);
 }
 
 // Query for the details of the given published file ids (the RequestUGCDetails call is deprecated and replaced with this)
@@ -221,11 +320,11 @@ UGCQueryHandle_t Steam_UGC::CreateQueryUGCDetailsRequest( PublishedFileId_t *pve
     
 #ifndef EMU_RELEASE_BUILD
     for (const auto &id : only) {
-        PRINT_DEBUG("  file ID = %llu", id);
+        PRINT_DEBUG("  requesting details for file ID = %llu", id);
     }
 #endif
 
-    return new_ugc_query(false, only);
+    return new_ugc_query(eUGCDetailsRequest, false, 0, true, only);
 }
 
 
@@ -235,22 +334,97 @@ SteamAPICall_t Steam_UGC::SendQueryUGCRequest( UGCQueryHandle_t handle )
 {
     PRINT_DEBUG("%llu", handle);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
-    if (handle == k_UGCQueryHandleInvalid) return k_uAPICallInvalid;
+    
+    const auto trigger_failure = [handle, this](){
+        SteamUGCQueryCompleted_t data{};
+        data.m_handle = handle;
+        data.m_eResult = k_EResultFail;
+        data.m_unNumResultsReturned = 0;
+        data.m_unTotalMatchingResults = 0;
+        data.m_bCachedData = false;
+        
+        auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+        callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+        return ret;
+    };
+    
+    if (handle == k_UGCQueryHandleInvalid) return trigger_failure();
 
     auto request = std::find_if(ugc_queries.begin(), ugc_queries.end(), [&handle](struct UGC_query const& item) { return item.handle == handle; });
-    if (ugc_queries.end() == request)
-        return k_uAPICallInvalid;
+    if (ugc_queries.end() == request) return trigger_failure();
 
-    if (request->return_all_subscribed) {
-        request->results = std::set<PublishedFileId_t>(ugc_bridge->subbed_mods_itr_begin(), ugc_bridge->subbed_mods_itr_end());
+    SteamUGCQueryCompleted_t data{};
+    data.m_handle = handle;
+    data.m_eResult = k_EResultOK;
+    data.m_bCachedData = false;
+
+    std::set<PublishedFileId_t> all_subscribed = std::set<PublishedFileId_t>(ugc_bridge->subbed_mods_itr_begin(), ugc_bridge->subbed_mods_itr_end());
+
+    if (request->query_type == eUserUGCRequest) {
+        if (request->return_all_subscribed) {
+            if (request->page > 0) {
+                uint32 beg_item = (request->page - 1) * kNumUGCResultsPerPage;
+                if (beg_item < all_subscribed.size()) {
+                    auto sub = all_subscribed.begin();
+                    std::advance(sub, beg_item);
+                    for (uint32 i = 0; sub != all_subscribed.end() && i < kNumUGCResultsPerPage; ++sub, ++i) {
+                        request->results.insert(*sub);
+                    }
+                }
+            }
+
+            data.m_unNumResultsReturned = static_cast<uint32>(request->results.size());
+            data.m_unTotalMatchingResults = static_cast<uint32>(all_subscribed.size());
+        }
+        else {
+            data.m_unNumResultsReturned = 0;
+            data.m_unTotalMatchingResults = 0;
+        }
     }
+    else if (request->query_type == eAllUGCRequestPage || request->query_type == eAllUGCRequestCursor) {
+        if (request->page > 0) {
+            uint32 beg_item = (request->page - 1) * kNumUGCResultsPerPage;
+            if (beg_item < all_subscribed.size()) {
+                auto sub = all_subscribed.begin();
+                std::advance(sub, beg_item);
+                for (uint32 i = 0; sub != all_subscribed.end() && i < kNumUGCResultsPerPage; ++sub, ++i) {
+                    request->results.insert(*sub);
+                }
 
-    if (request->return_only.size()) {
-        for (auto & s : request->return_only) {
-            if (ugc_bridge->has_subbed_mod(s)) {
-                request->results.insert(s);
+                data.m_unNumResultsReturned = static_cast<uint32>(request->results.size());
+                data.m_unTotalMatchingResults = static_cast<uint32>(all_subscribed.size());
+                if (request->query_type == eAllUGCRequestCursor) {
+                    std::string next_page_cursor = request->next_cursor ? std::to_string(request->page + 1) : std::string("");
+                    next_page_cursor.copy(data.m_rgchNextCursor, sizeof(data.m_rgchNextCursor) - 1);
+                }
+            }
+            else {
+                data.m_eResult = k_EResultInvalidParam;
+                data.m_unNumResultsReturned = 0;
+                data.m_unTotalMatchingResults = 0;
+                if (request->query_type == eAllUGCRequestCursor)
+                    data.m_rgchNextCursor[0] = '\0';
             }
         }
+        else { // impossible to meet this condition when query_type is eAllUGCRequestPage though
+            data.m_eResult = request->query_type == eAllUGCRequestCursor ? k_EResultFail : k_EResultInvalidParam;
+            data.m_unNumResultsReturned = 0;
+            data.m_unTotalMatchingResults = 0;
+            if (request->query_type == eAllUGCRequestCursor)
+                data.m_rgchNextCursor[0] = '\0';
+        }
+    }
+    else if (request->query_type == eUGCDetailsRequest) {
+        if (request->return_only.size()) {
+            for (auto & s : request->return_only) {
+                if (ugc_bridge->has_subbed_mod(s)) {
+                    request->results.insert(s);
+                }
+            }
+        }
+
+        data.m_unNumResultsReturned = static_cast<uint32>(request->results.size());
+        data.m_unTotalMatchingResults = static_cast<uint32>(request->results.size());
     }
 
     // send these handles to steam_remote_storage since the game will later
@@ -260,13 +434,6 @@ SteamAPICall_t Steam_UGC::SendQueryUGCRequest( UGCQueryHandle_t handle )
         ugc_bridge->add_ugc_query_result(mod.handleFile, fileid, true);
         ugc_bridge->add_ugc_query_result(mod.handlePreviewFile, fileid, false);
     }
-
-    SteamUGCQueryCompleted_t data = {};
-    data.m_handle = handle;
-    data.m_eResult = k_EResultOK;
-    data.m_unNumResultsReturned = static_cast<uint32>(request->results.size());
-    data.m_unTotalMatchingResults = static_cast<uint32>(request->results.size());
-    data.m_bCachedData = false;
     
     auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
     callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
@@ -278,33 +445,23 @@ SteamAPICall_t Steam_UGC::SendQueryUGCRequest( UGCQueryHandle_t handle )
 bool Steam_UGC::GetQueryUGCResult( UGCQueryHandle_t handle, uint32 index, SteamUGCDetails_t *pDetails )
 {
     PRINT_DEBUG("%llu %u %p", handle, index, pDetails);
-    std::lock_guard<std::recursive_mutex> lock(global_mutex);
-    if (handle == k_UGCQueryHandleInvalid) return false;
+    return internal_GetQueryUGCResult(handle, index, pDetails, IUgcItfVersion::v020);
+}
 
-    auto request = std::find_if(ugc_queries.begin(), ugc_queries.end(), [&handle](struct UGC_query const& item) { return item.handle == handle; });
-    if (ugc_queries.end() == request) {
-        return false;
-    }
-
-    if (index >= request->results.size()) {
-        return false;
-    }
-
-    auto it = request->results.begin();
-    std::advance(it, index);
-    PublishedFileId_t file_id = *it;
-    set_details(file_id, pDetails);
-    return true;
+bool Steam_UGC::GetQueryUGCResult_old( UGCQueryHandle_t handle, uint32 index, SteamUGCDetails_t *pDetails )
+{
+    PRINT_DEBUG("%llu %u %p", handle, index, pDetails);
+    return internal_GetQueryUGCResult(handle, index, pDetails, IUgcItfVersion::v018);
 }
 
 std::optional<std::string> Steam_UGC::get_query_ugc_tag(UGCQueryHandle_t handle, uint32 index, uint32 indexTag)
 {
     auto res = get_query_ugc_tags(handle, index);
-    if (!res.has_value()) return std::nullopt;
-    if (indexTag >= res.value().size()) return std::nullopt;
+    if (res.empty()) return std::nullopt;
+    if (indexTag >= res.size()) return std::nullopt;
 
-    std::string tmp = res.value()[indexTag];
-    if (tmp.back() == ',') {
+    std::string tmp = res[indexTag];
+    if (!tmp.empty() && tmp.back() == ',') {
         tmp = tmp.substr(0, tmp.size() - 1);
     }
     return tmp;
@@ -318,7 +475,7 @@ uint32 Steam_UGC::GetQueryUGCNumTags( UGCQueryHandle_t handle, uint32 index )
     if (handle == k_UGCQueryHandleInvalid) return 0;
     
     auto res = get_query_ugc_tags(handle, index);
-    return res.has_value() ? static_cast<uint32>(res.value().size()) : 0;
+    return static_cast<uint32>(res.size());
 }
 
 bool Steam_UGC::GetQueryUGCTag( UGCQueryHandle_t handle, uint32 index, uint32 indexTag, STEAM_OUT_STRING_COUNT( cchValueSize ) char* pchValue, uint32 cchValueSize )
@@ -841,20 +998,19 @@ bool Steam_UGC::SetTimeUpdatedDateRange( UGCQueryHandle_t handle, RTime32 rtStar
 SteamAPICall_t Steam_UGC::RequestUGCDetails( PublishedFileId_t nPublishedFileID, uint32 unMaxAgeSeconds )
 {
     PRINT_DEBUG("%llu", nPublishedFileID);
-    std::lock_guard<std::recursive_mutex> lock(global_mutex);
-    
-    SteamUGCRequestUGCDetailsResult_t data{};
-    data.m_bCachedData = false;
-    set_details(nPublishedFileID, &(data.m_details));
-    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
-    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
-    return ret;
+    return internal_RequestUGCDetails(nPublishedFileID, unMaxAgeSeconds, IUgcItfVersion::v020);
+}
+ 
+SteamAPICall_t Steam_UGC::RequestUGCDetails_old( PublishedFileId_t nPublishedFileID, uint32 unMaxAgeSeconds )
+{
+    PRINT_DEBUG("%llu", nPublishedFileID);
+    return internal_RequestUGCDetails(nPublishedFileID, unMaxAgeSeconds, IUgcItfVersion::v018);
 }
 
 SteamAPICall_t Steam_UGC::RequestUGCDetails( PublishedFileId_t nPublishedFileID )
 {
     PRINT_DEBUG("old");
-    return RequestUGCDetails(nPublishedFileID, 0);
+    return RequestUGCDetails_old(nPublishedFileID, 0);
 }
 
 
@@ -933,9 +1089,7 @@ bool Steam_UGC::SetItemVisibility( UGCUpdateHandle_t handle, ERemoteStoragePubli
 bool Steam_UGC::SetItemTags( UGCUpdateHandle_t updateHandle, const SteamParamStringArray_t *pTags )
 {
     PRINT_DEBUG("old");
-    std::lock_guard<std::recursive_mutex> lock(global_mutex);
-    
-    return false;
+    return SetItemTags(updateHandle, pTags, false);
 }
 
 bool Steam_UGC::SetItemTags( UGCUpdateHandle_t updateHandle, const SteamParamStringArray_t *pTags, bool bAllowAdminTags )
@@ -1114,16 +1268,21 @@ SteamAPICall_t Steam_UGC::SetUserItemVote( PublishedFileId_t nPublishedFileID, b
     if (!settings->isModInstalled(nPublishedFileID)) return k_uAPICallInvalid; // TODO is this correct
     
     auto mod  = settings->getMod(nPublishedFileID);
-    SetUserItemVoteResult_t data{};
-    data.m_eResult = EResult::k_EResultOK;
-    data.m_nPublishedFileId = nPublishedFileID;
     if (bVoteUp) {
         ++mod.votesUp;
     } else {
         ++mod.votesDown;
     }
     settings->addModDetails(nPublishedFileID, mod);
-    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    
+    SetUserItemVoteResult_t data{};
+    data.m_eResult = EResult::k_EResultOK;
+    data.m_nPublishedFileId = nPublishedFileID;
+    data.m_bVoteUp = bVoteUp;
+
+    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    return ret;
 }
 
 
@@ -1141,7 +1300,10 @@ SteamAPICall_t Steam_UGC::GetUserItemVote( PublishedFileId_t nPublishedFileID )
     data.m_bVotedDown = mod.votesDown;
     data.m_bVotedUp = mod.votesUp;
     data.m_bVoteSkipped = true;
-    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    
+    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    return ret;
 }
 
 
@@ -1166,7 +1328,9 @@ SteamAPICall_t Steam_UGC::AddItemToFavorites( AppId_t nAppId, PublishedFileId_t 
         data.m_eResult = EResult::k_EResultOK;
     }
     
-    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    return ret;
 }
 
 
@@ -1191,7 +1355,9 @@ SteamAPICall_t Steam_UGC::RemoveItemFromFavorites( AppId_t nAppId, PublishedFile
         data.m_eResult = EResult::k_EResultOK;
     }
     
-    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    return ret;
 }
 
 
@@ -1201,7 +1367,7 @@ SteamAPICall_t Steam_UGC::SubscribeItem( PublishedFileId_t nPublishedFileID )
     PRINT_DEBUG("%llu", nPublishedFileID);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
 
-    RemoteStorageSubscribePublishedFileResult_t data;
+    RemoteStorageSubscribePublishedFileResult_t data{};
     data.m_nPublishedFileId = nPublishedFileID;
     if (settings->isModInstalled(nPublishedFileID)) {
         data.m_eResult = k_EResultOK;
@@ -1209,7 +1375,9 @@ SteamAPICall_t Steam_UGC::SubscribeItem( PublishedFileId_t nPublishedFileID )
     } else {
         data.m_eResult = k_EResultFail;
     }
-    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    return ret;
 }
  // subscribe to this item, will be installed ASAP
 
@@ -1219,7 +1387,7 @@ SteamAPICall_t Steam_UGC::UnsubscribeItem( PublishedFileId_t nPublishedFileID )
     PRINT_DEBUG("%llu", nPublishedFileID);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
 
-    RemoteStorageUnsubscribePublishedFileResult_t data;
+    RemoteStorageUnsubscribePublishedFileResult_t data{};
     data.m_nPublishedFileId = nPublishedFileID;
     if (!ugc_bridge->has_subbed_mod(nPublishedFileID)) {
         data.m_eResult = k_EResultFail; //TODO: check if this is accurate
@@ -1228,7 +1396,9 @@ SteamAPICall_t Steam_UGC::UnsubscribeItem( PublishedFileId_t nPublishedFileID )
         ugc_bridge->remove_subbed_mod(nPublishedFileID);
     }
 
-    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    return ret;
 }
  // unsubscribe from this item, will be uninstalled after game quits
 
@@ -1260,18 +1430,20 @@ uint32 Steam_UGC::GetItemState( PublishedFileId_t nPublishedFileID )
 {
     PRINT_DEBUG("%llu", nPublishedFileID);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
-    if (ugc_bridge->has_subbed_mod(nPublishedFileID)) {
-        if (settings->isModInstalled(nPublishedFileID)) {
-            PRINT_DEBUG("  mod is subscribed and installed");
-            return k_EItemStateInstalled | k_EItemStateSubscribed;
-        }
-
-        PRINT_DEBUG("  mod is subscribed");
-        return k_EItemStateSubscribed;
+    
+    if (!settings->isModInstalled(nPublishedFileID)) {
+        PRINT_DEBUG("  mod isn't found");
+        return k_EItemStateNone;
     }
 
-    PRINT_DEBUG("  mod isn't found");
-    return k_EItemStateNone;
+    if (ugc_bridge->has_subbed_mod(nPublishedFileID)) {
+        PRINT_DEBUG("  mod is subscribed and installed");
+        return k_EItemStateInstalled | k_EItemStateSubscribed;
+    }
+
+
+    PRINT_DEBUG("  mod is not subscribed");
+    return k_EItemStateDisabledLocally;
 }
 
 
@@ -1293,7 +1465,7 @@ bool Steam_UGC::GetItemInstallInfo( PublishedFileId_t nPublishedFileID, uint64 *
     }
 
     if (punSizeOnDisk) *punSizeOnDisk = mod.primaryFileSize;
-    if (punTimeStamp) *punTimeStamp = mod.timeUpdated;
+    if (punTimeStamp) *punTimeStamp = mod.timeAddedToUserList;
     if (pchFolder && cchFolderSize) {
         // human fall flat doesn't send a nulled buffer, and won't recognize the proper mod path because of that
         memset(pchFolder, 0, cchFolderSize);
@@ -1348,10 +1520,37 @@ bool Steam_UGC::GetItemInstallInfo( PublishedFileId_t nPublishedFileID, uint64 *
 // If bHighPriority is set, any other item download will be suspended and this item downloaded ASAP.
 bool Steam_UGC::DownloadItem( PublishedFileId_t nPublishedFileID, bool bHighPriority )
 {
-    PRINT_DEBUG_ENTRY();
+    PRINT_DEBUG("%llu %i // TODO", nPublishedFileID, (int)bHighPriority);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    
+    if (!settings->isModInstalled(nPublishedFileID)) {
+        DownloadItemResult_t data_fail{};
+        data_fail.m_eResult = EResult::k_EResultFail;
+        data_fail.m_nPublishedFileId = nPublishedFileID;
+        data_fail.m_unAppID = settings->get_local_game_id().AppID();
+        callbacks->addCBResult(data_fail.k_iCallback, &data_fail, sizeof(data_fail), 0.050);
+        return false;
+    }
 
-    return false;
+    {
+        DownloadItemResult_t data{};
+        data.m_eResult = EResult::k_EResultOK;
+        data.m_nPublishedFileId = nPublishedFileID;
+        data.m_unAppID = settings->get_local_game_id().AppID();
+        callbacks->addCBResult(data.k_iCallback, &data, sizeof(data), 0.1);
+    }
+
+    {
+        ItemInstalled_t data{};
+        data.m_hLegacyContent = nPublishedFileID;
+        data.m_nPublishedFileId = nPublishedFileID;
+        data.m_unAppID = settings->get_local_game_id().AppID();
+        data.m_unManifestID = 123; // TODO
+        callbacks->addCBResult(data.k_iCallback, &data, sizeof(data), 0.15);
+    }
+
+    PRINT_DEBUG("downloaded!");
+    return true;
 }
 
 
@@ -1369,7 +1568,7 @@ bool Steam_UGC::BInitWorkshopForGameServer( DepotId_t unWorkshopDepotID, const c
 // SuspendDownloads( true ) will suspend all workshop downloads until SuspendDownloads( false ) is called or the game ends
 void Steam_UGC::SuspendDownloads( bool bSuspend )
 {
-    PRINT_DEBUG_ENTRY();
+    PRINT_DEBUG_TODO();
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     
 }
@@ -1383,7 +1582,10 @@ SteamAPICall_t Steam_UGC::StartPlaytimeTracking( PublishedFileId_t *pvecPublishe
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     StopPlaytimeTrackingResult_t data;
     data.m_eResult = k_EResultOK;
-    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    
+    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    return ret;
 }
 
 STEAM_CALL_RESULT( StopPlaytimeTrackingResult_t )
@@ -1393,7 +1595,10 @@ SteamAPICall_t Steam_UGC::StopPlaytimeTracking( PublishedFileId_t *pvecPublished
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     StopPlaytimeTrackingResult_t data;
     data.m_eResult = k_EResultOK;
-    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    
+    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    return ret;
 }
 
 STEAM_CALL_RESULT( StopPlaytimeTrackingResult_t )
@@ -1403,7 +1608,10 @@ SteamAPICall_t Steam_UGC::StopPlaytimeTrackingForAllItems()
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     StopPlaytimeTrackingResult_t data;
     data.m_eResult = k_EResultOK;
-    return callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    
+    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    return ret;
 }
 
 
@@ -1495,8 +1703,17 @@ SteamAPICall_t Steam_UGC::GetWorkshopEULAStatus()
 {
     PRINT_DEBUG_TODO();
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
+    WorkshopEULAStatus_t data{};
+    data.m_eResult = k_EResultOK;
+    data.m_nAppID = settings->get_local_game_id().AppID();
+    data.m_unVersion = 0; // TODO
+    data.m_rtAction = (RTime32)std::chrono::duration_cast<std::chrono::seconds>(startup_time.time_since_epoch()).count();
+    data.m_bAccepted = true;
+    data.m_bNeedsAction = false;
     
-    return k_uAPICallInvalid;
+    auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    return ret;
 }
 
 // Return the user's community content descriptor preferences

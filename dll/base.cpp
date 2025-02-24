@@ -29,7 +29,7 @@ const std::chrono::time_point<std::chrono::high_resolution_clock> startup_counte
 const std::chrono::time_point<std::chrono::system_clock> startup_time = std::chrono::system_clock::now();
 
 #ifndef EMU_RELEASE_BUILD
-dbg_log dbg_logger(get_full_program_path() + "STEAM_LOG.txt");
+dbg_log dbg_logger(get_full_program_path() + "STEAM_LOG_" + std::to_string(common_helpers::rand_number(UINT32_MAX)) + ".log");
 #endif
 
 
@@ -167,42 +167,14 @@ bool check_timedout(std::chrono::high_resolution_clock::time_point old, double t
 }
 
 #ifdef __LINUX__
-std::string get_lib_path() {
-  std::string dir = "/proc/self/map_files";
-  DIR *dp;
-  int i = 0;
-  struct dirent *ep;
-  dp = opendir (dir.c_str());
-  uintptr_t p = (uintptr_t)&get_lib_path;
-
-  if (dp != NULL)
-  {
-    while ((ep = readdir (dp))) {
-      if (memcmp(ep->d_name, ".", 2) != 0 && memcmp(ep->d_name, "..", 3) != 0) {
-            char *upper = NULL;
-            uintptr_t lower_bound = strtoull(ep->d_name, &upper, 16);
-            if (lower_bound) {
-                ++upper;
-                uintptr_t upper_bound = strtoull(upper, &upper, 16);
-                if (upper_bound && (lower_bound < p && p < upper_bound)) {
-                    std::string path = dir + PATH_SEPARATOR + ep->d_name;
-                    char link[PATH_MAX] = {};
-                    if (readlink(path.c_str(), link, sizeof(link)) > 0) {
-                        std::string lib_path = link;
-                        (void) closedir (dp);
-                        return link;
-                    }
-                }
-            }
-
-        i++;
-      }
+std::string get_lib_path()
+{
+    Dl_info info;
+    if (dladdr((void*)get_lib_path, &info))
+    {
+        return std::string(info.dli_fname);
     }
-
-    (void) closedir (dp);
-  }
-
-  return ".";
+    return ".";
 }
 #endif
 
@@ -307,6 +279,58 @@ unsigned int file_size_(const std::string &full_path)
 
 
 #ifdef EMU_EXPERIMENTAL_BUILD
+
+static std::vector<void*> loaded_libs{};
+
+static void load_dlls()
+{
+    constexpr static const char LIB_EXTENSION[] =
+#ifdef __WINDOWS__
+        ".dll"
+#else
+        ".so"
+#endif
+        ;
+
+    std::string path(Local_Storage::get_game_settings_path() + "load_dlls" + PATH_SEPARATOR);
+
+    std::vector<std::string> paths(Local_Storage::get_filenames_path(path));
+    for (auto & p: paths) {
+        std::string full_path(path + p);
+        if (!common_helpers::ends_with_i(full_path, LIB_EXTENSION)) continue;
+
+        PRINT_DEBUG("loading '%s'", full_path.c_str());
+        auto lib_handle =
+#ifdef __WINDOWS__
+            LoadLibraryW(utf8_decode(full_path).c_str());
+#else
+            dlopen(full_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
+
+        if (lib_handle != nullptr) {
+            loaded_libs.push_back(reinterpret_cast<void *>(lib_handle));
+            PRINT_DEBUG(" LOADED");
+        } else {
+#ifdef __WINDOWS__
+            PRINT_DEBUG(" FAILED, error code 0x%X", GetLastError());
+#else
+            PRINT_DEBUG(" FAILED, error string '%s'", dlerror());
+#endif
+        }
+    }
+}
+
+static void unload_dlls()
+{
+    for (auto lib_handle : loaded_libs) {
+#ifdef __WINDOWS__
+        FreeLibrary(reinterpret_cast<HMODULE>(lib_handle));
+#else
+        dlclose(lib_handle);
+#endif
+    }
+}
+
 #ifdef __WINDOWS__
 
 struct ips_test {
@@ -491,23 +515,6 @@ static void load_crack_dll()
 }
 
 #include "dll/local_storage.h"
-static void load_dlls()
-{
-    std::string path(Local_Storage::get_game_settings_path() + "load_dlls" + PATH_SEPARATOR);
-
-    std::vector<std::string> paths(Local_Storage::get_filenames_path(path));
-    for (auto & p: paths) {
-        std::string full_path(path + p);
-        if (!common_helpers::ends_with_i(full_path, ".dll")) continue;
-
-        PRINT_DEBUG("loading '%s'", full_path.c_str());
-        if (LoadLibraryW(utf8_decode(full_path).c_str())) {
-            PRINT_DEBUG(" LOADED");
-        } else {
-            PRINT_DEBUG(" FAILED, error 0x%X", GetLastError());
-        }
-    }
-}
 
 //For some reason when this function is optimized it breaks the shogun 2 prophet (reloaded) crack.
 #pragma optimize( "", off )
@@ -641,6 +648,8 @@ BOOL WINAPI DllMain( HINSTANCE, DWORD dwReason, LPVOID )
                 }
                 DetourTransactionCommit();
             }
+
+            unload_dlls();
         break;
     }
 
@@ -649,12 +658,23 @@ BOOL WINAPI DllMain( HINSTANCE, DWORD dwReason, LPVOID )
 
 #else
 
+__attribute__((__constructor__)) static void lib_base_entry()
+{
+    load_dlls();
+}
+
+__attribute__((__destructor__)) static void lib_base_exit()
+{
+    unload_dlls();
+}
+
 void set_whitelist_ips(uint32_t *from, uint32_t *to, unsigned num_ips)
 {
 
 }
 
-#endif
+#endif // __WINDOWS__
+
 #else
 
 void set_whitelist_ips(uint32_t *from, uint32_t *to, unsigned num_ips)
@@ -662,5 +682,5 @@ void set_whitelist_ips(uint32_t *from, uint32_t *to, unsigned num_ips)
 
 }
 
-#endif
+#endif // EMU_EXPERIMENTAL_BUILD
 

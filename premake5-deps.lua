@@ -40,6 +40,22 @@ newoption {
     default = nil
 }
 
+newoption {
+    category = "tools",
+    trigger = "cmake-toolchain",
+    description = "Use cmake toolchain",
+    value = 'path/to/toolchain.cmake',
+    default = nil
+}
+
+newoption {
+    category = "tools",
+    trigger = "custom-extractor",
+    description = "Use custom extractor",
+    value = 'path/to/7z.exe',
+    default = nil
+}
+
 -- deps extraction
 newoption {
     category = "extract",
@@ -177,11 +193,16 @@ if not third_party_dir or not os.isdir(third_party_dir) then
     error('third-party dir is missing')
 end
 
-if os.host() == 'windows' then
-    extractor = extractor .. '.exe'
-end
-if not extractor or not os.isfile(extractor) then
-    error('extractor is missing from third-party dir. extractor: ' .. extractor)
+if _OPTIONS["custom-extractor"] then
+    extractor = _OPTIONS["custom-extractor"]
+    print('using custom extractor: ' .. _OPTIONS["custom-extractor"])
+else
+    if os.host() == 'windows' then
+        extractor = extractor .. '.exe'
+    end
+    if not extractor or not os.isfile(extractor) then
+        error('extractor is missing from third-party dir. extractor: ' .. extractor)
+    end
 end
 
 
@@ -241,11 +262,14 @@ local function cmake_build(dep_folder, is_32, extra_cmd_defs, c_flags_init, cxx_
 
         table.insert(all_cxxflags_init, '/MT')
         table.insert(all_cxxflags_init, '/D_MT')
-        
-        if is_32 then
-            cmd_gen = cmd_gen .. ' -A Win32'
-        else
-            cmd_gen = cmd_gen .. ' -A x64'
+
+        local cmake_generator = os.getenv("CMAKE_GENERATOR") or ""
+        if cmake_generator == "" and os.host() == 'windows' or cmake_generator:find("Visual Studio") then
+            if is_32 then
+                cmd_gen = cmd_gen .. ' -A Win32'
+            else
+                cmd_gen = cmd_gen .. ' -A x64'
+            end
         end
     else
         error("unsupported action for cmake build: " .. _ACTION)
@@ -283,6 +307,9 @@ local function cmake_build(dep_folder, is_32, extra_cmd_defs, c_flags_init, cxx_
 
     -- write toolchain file
     local toolchain_file_content = ''
+    if _OPTIONS["cmake-toolchain"] then
+        toolchain_file_content='include(' .. _OPTIONS["cmake-toolchain"] .. ')\n\n'
+    end
     if #cflags_init_str > 0 then
         toolchain_file_content = toolchain_file_content .. 'set(CMAKE_C_FLAGS_INIT "' .. cflags_init_str .. '" )\n'
     end
@@ -361,10 +388,12 @@ end
 
 -- chmod tools
 if os.host() == "linux" then
-    local ok_chmod, err_chmod = os.chmod(extractor, "777")
-    if not ok_chmod then
-        error("cannot chmod: " .. err_chmod)
-        return
+    if not _OPTIONS["custom-extractor"] then
+        local ok_chmod, err_chmod = os.chmod(extractor, "777")
+        if not ok_chmod then
+            error("cannot chmod: " .. err_chmod)
+            return
+        end
     end
 
     if not _OPTIONS["custom-cmake"] then
@@ -498,23 +527,41 @@ end
 -- https://github.com/Kitware/CMake/blob/a6853135f569f0b040a34374a15a8361bb73901b/Modules/FindZLIB.cmake#L98C4-L98C13
 
 local zlib_name = ''
+local mbedtls_name = ''
+local mbedcrypto_name = ''
+local mbedx509_name = ''
 -- name
 if _ACTION and os.target() == 'windows' then
     if string.match(_ACTION, 'vs.+') then
         zlib_name = 'zlibstatic'
+        mbedtls_name = 'mbedtls'
+        mbedcrypto_name = 'mbedcrypto'
+        mbedx509_name = 'mbedx509'
     elseif string.match(_ACTION, 'gmake.*') then
         zlib_name = 'libzlibstatic'
+        mbedtls_name = 'libmbedtls'
+        mbedcrypto_name = 'libmbedcrypto'
+        mbedx509_name = 'libmbedx509'
     else
         error('unsupported os/action: ' .. os.target() .. ' / ' .. _ACTION)
     end
 else -- linux or macos
     zlib_name = 'libz'
+    mbedtls_name = 'libmbedtls'
+    mbedcrypto_name = 'libmbedcrypto'
+    mbedx509_name = 'mbedx509'
 end
 -- extension
 if _ACTION and string.match(_ACTION, 'vs.+') then
     zlib_name = zlib_name .. '.lib'
+    mbedtls_name = mbedtls_name .. '.lib'
+    mbedcrypto_name = mbedcrypto_name .. '.lib'
+    mbedx509_name = mbedx509_name .. '.lib'
 else
     zlib_name = zlib_name .. '.a'
+    mbedtls_name = mbedtls_name .. '.a'
+    mbedcrypto_name = mbedcrypto_name .. '.a'
+    mbedx509_name = mbedx509_name .. '.a'
 end
 
 local wild_zlib_path_32 = path.join(deps_dir, 'zlib', 'install32', 'lib', zlib_name)
@@ -532,22 +579,60 @@ local wild_zlib_64 = {
     'ZLIB_LIBRARY="' .. wild_zlib_path_64 .. '"',
 }
 
+if _OPTIONS["build-mbedtls"] or _OPTIONS["all-build"] then
+    local mbedtls_common_defs = {
+        "USE_STATIC_MBEDTLS_LIBRARY=ON",
+        "USE_SHARED_MBEDTLS_LIBRARY=OFF",
+        "ENABLE_TESTING=OFF",
+        "ENABLE_PROGRAMS=OFF",
+        "MBEDTLS_FATAL_WARNINGS=OFF",
+    }
+    if os.target() == 'windows' and string.match(_ACTION, 'vs.+') then
+        table.insert(mbedtls_common_defs, "MSVC_STATIC_RUNTIME=ON")
+    else -- linux or macos or MinGW on Windows
+        table.insert(mbedtls_common_defs, "LINK_WITH_PTHREAD=ON")
+    end
+
+    local mbedtls_32_bit_fixes = {}
+    if _OPTIONS["32-build"] and string.match(_ACTION, 'gmake.*') then
+        table.insert(mbedtls_32_bit_fixes, '-mpclmul')
+        table.insert(mbedtls_32_bit_fixes, '-msse2')
+        table.insert(mbedtls_32_bit_fixes, '-maes')
+    end
+
+    if _OPTIONS["32-build"] then
+        cmake_build('mbedtls', true, mbedtls_common_defs, mbedtls_32_bit_fixes)
+    end
+    if _OPTIONS["64-build"] then
+        cmake_build('mbedtls', false, mbedtls_common_defs)
+    end
+end
+
 if _OPTIONS["build-curl"] or _OPTIONS["all-build"] then
     local curl_common_defs = {
         "BUILD_CURL_EXE=OFF",
-        "BUILD_SHARED_LIBS=OFF",
         "BUILD_STATIC_CURL=OFF", -- "Build curl executable with static libcurl"
+
+        "BUILD_SHARED_LIBS=OFF",
         "BUILD_STATIC_LIBS=ON",
         "BUILD_MISC_DOCS=OFF",
         "BUILD_TESTING=OFF",
         "BUILD_LIBCURL_DOCS=OFF",
         "ENABLE_CURL_MANUAL=OFF",
+
         "CURL_USE_OPENSSL=OFF",
         "CURL_ZLIB=ON",
+        
+        "CURL_USE_MBEDTLS=ON",
+        -- "CURL_USE_SCHANNEL=ON",
+        "CURL_CA_FALLBACK=ON",
+
+        -- fix building on Arch Linux
         "CURL_USE_LIBSSH2=OFF",
         "CURL_USE_LIBPSL=OFF",
         "USE_LIBIDN2=OFF",
         "CURL_DISABLE_LDAP=ON",
+        "USE_NGHTTP2=OFF",
     }
     if os.target() == 'windows' and string.match(_ACTION, 'vs.+') then
         table.insert(curl_common_defs, "CURL_STATIC_CRT=ON")
@@ -555,10 +640,20 @@ if _OPTIONS["build-curl"] or _OPTIONS["all-build"] then
     end
 
     if _OPTIONS["32-build"] then
-        cmake_build('curl', true, merge_list(curl_common_defs, wild_zlib_32))
+        cmake_build('curl', true, merge_list(curl_common_defs, merge_list(wild_zlib_32, {
+            'MBEDTLS_INCLUDE_DIRS="' .. path.join(deps_dir, 'mbedtls', 'install32', 'include') .. '"',
+            'MBEDTLS_LIBRARY="' .. path.join(deps_dir, 'mbedtls', 'install32', 'lib', mbedtls_name) .. '"',
+            'MBEDCRYPTO_LIBRARY="' .. path.join(deps_dir, 'mbedtls', 'install32', 'lib', mbedcrypto_name) .. '"',
+            'MBEDX509_LIBRARY="' .. path.join(deps_dir, 'mbedtls', 'install32', 'lib', mbedx509_name) .. '"',
+        })))
     end
     if _OPTIONS["64-build"] then
-        cmake_build('curl', false, merge_list(curl_common_defs, wild_zlib_64))
+        cmake_build('curl', false, merge_list(curl_common_defs, merge_list(wild_zlib_64, {
+            'MBEDTLS_INCLUDE_DIRS="' .. path.join(deps_dir, 'mbedtls', 'install64', 'include') .. '"',
+            'MBEDTLS_LIBRARY="' .. path.join(deps_dir, 'mbedtls', 'install64', 'lib', mbedtls_name) .. '"',
+            'MBEDCRYPTO_LIBRARY="' .. path.join(deps_dir, 'mbedtls', 'install64', 'lib', mbedcrypto_name) .. '"',
+            'MBEDX509_LIBRARY="' .. path.join(deps_dir, 'mbedtls', 'install64', 'lib', mbedx509_name) .. '"',
+        })))
     end
 end
 
@@ -588,32 +683,6 @@ if _OPTIONS["build-protobuf"] or _OPTIONS["all-build"] then
     end
 end
 
-if _OPTIONS["build-mbedtls"] or _OPTIONS["all-build"] then
-    local mbedtls_common_defs = {
-        "USE_STATIC_MBEDTLS_LIBRARY=ON",
-        "USE_SHARED_MBEDTLS_LIBRARY=OFF",
-        "ENABLE_TESTING=OFF",
-        "ENABLE_PROGRAMS=OFF",
-        "MBEDTLS_FATAL_WARNINGS=OFF",
-    }
-    if os.target() == 'windows' and string.match(_ACTION, 'vs.+') then
-        table.insert(mbedtls_common_defs, "MSVC_STATIC_RUNTIME=ON")
-    else -- linux or macos or MinGW on Windows
-        table.insert(mbedtls_common_defs, "LINK_WITH_PTHREAD=ON")
-    end
-
-    if _OPTIONS["32-build"] then
-        cmake_build('mbedtls', true, mbedtls_common_defs, {
-            '-mpclmul',
-            '-msse2',
-            '-maes',
-        })
-    end
-    if _OPTIONS["64-build"] then
-        cmake_build('mbedtls', false, mbedtls_common_defs)
-    end
-end
-
 if _OPTIONS["build-ingame_overlay"] or _OPTIONS["all-build"] then
     -- fixes 32-bit compilation of DX12
     local overaly_imgui_cfg_file = path.join(deps_dir, 'ingame_overlay', 'imconfig.imcfg')
@@ -629,6 +698,8 @@ if _OPTIONS["build-ingame_overlay"] or _OPTIONS["all-build"] then
         'INGAMEOVERLAY_USE_SYSTEM_LIBRARIES=OFF',
         'INGAMEOVERLAY_USE_SPDLOG=OFF',
         'INGAMEOVERLAY_BUILD_TESTS=OFF',
+        'INGAMEOVERLAY_DYNAMIC_RUNTIME=OFF',
+        --'USE_MSVC_RUNTIME_LIBRARY_DLL=OFF', -- Should we?
     }
     -- fix missing standard include/header file for gcc/clang
     local ingame_overlay_fixes = {}
@@ -645,19 +716,23 @@ if _OPTIONS["build-ingame_overlay"] or _OPTIONS["all-build"] then
 
     if _OPTIONS["32-build"] then
         cmake_build('ingame_overlay/deps/System', true, {
-            'BUILD_SYSTEMLIB_TESTS=OFF',
+            'SYSTEM_BUILD_TESTS=OFF',
+            'SYSTEM_DYNAMIC_RUNTIME=OFF',
         }, nil, ingame_overlay_fixes)
         cmake_build('ingame_overlay/deps/mini_detour', true, {
-            'BUILD_MINIDETOUR_TESTS=OFF',
+            'MINIDETOUR_BUILD_TESTS=OFF',
+            'MINIDETOUR_DYNAMIC_RUNTIME=OFF',
         })
         cmake_build('ingame_overlay', true, ingame_overlay_common_defs, nil, ingame_overlay_fixes)
     end
     if _OPTIONS["64-build"] then
         cmake_build('ingame_overlay/deps/System', false, {
-            'BUILD_SYSTEMLIB_TESTS=OFF',
+            'SYSTEM_BUILD_TESTS=OFF',
+            'SYSTEM_DYNAMIC_RUNTIME=OFF',
         }, nil, ingame_overlay_fixes)
         cmake_build('ingame_overlay/deps/mini_detour', false, {
-            'BUILD_MINIDETOUR_TESTS=OFF',
+            'MINIDETOUR_BUILD_TESTS=OFF',
+            'MINIDETOUR_DYNAMIC_RUNTIME=OFF',
         })
         cmake_build('ingame_overlay', false, ingame_overlay_common_defs, nil, ingame_overlay_fixes)
     end

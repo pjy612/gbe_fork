@@ -18,6 +18,7 @@
 #define STEAM_API_FUNCTIONS_IMPL
 #include "dll/dll.h"
 #include "dll/settings_parser.h"
+#include "dll/client_known_interfaces.h"
 
 
 static char old_client[128] = STEAMCLIENT_INTERFACE_VERSION; //"SteamClient017";
@@ -211,48 +212,48 @@ bool steamclient_has_ipv6_functions()
 static void *create_client_interface(const char *ver)
 {
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
-    void *steam_client = nullptr;
 
+    Steam_Client *client_ptr = get_steam_client();
     if (strstr(ver, "SteamClient") == ver) {
-        if (strcmp(ver, "SteamClient007") == 0) {
-            steam_client = static_cast<ISteamClient007 *>(get_steam_client());
+        if (strcmp(ver, "SteamClient006") == 0) {
+            return static_cast<ISteamClient006 *>(client_ptr);
+        } else if (strcmp(ver, "SteamClient007") == 0) {
+            return static_cast<ISteamClient007 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient008") == 0) {
-            steam_client = static_cast<ISteamClient008 *>(get_steam_client());
+            return static_cast<ISteamClient008 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient009") == 0) {
-            steam_client = static_cast<ISteamClient009 *>(get_steam_client());
+            return static_cast<ISteamClient009 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient010") == 0) {
-            steam_client = static_cast<ISteamClient010 *>(get_steam_client());
+            return static_cast<ISteamClient010 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient011") == 0) {
-            steam_client = static_cast<ISteamClient011 *>(get_steam_client());
+            return static_cast<ISteamClient011 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient012") == 0) {
-            steam_client = static_cast<ISteamClient012 *>(get_steam_client());
+            return static_cast<ISteamClient012 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient013") == 0) {
-            steam_client = static_cast<ISteamClient013 *>(get_steam_client());
+            return static_cast<ISteamClient013 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient014") == 0) {
-            steam_client = static_cast<ISteamClient014 *>(get_steam_client());
+            return static_cast<ISteamClient014 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient015") == 0) {
-            steam_client = static_cast<ISteamClient015 *>(get_steam_client());
+            return static_cast<ISteamClient015 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient016") == 0) {
-            steam_client = static_cast<ISteamClient016 *>(get_steam_client());
+            return static_cast<ISteamClient016 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient017") == 0) {
-            steam_client = static_cast<ISteamClient017 *>(get_steam_client());
+            return static_cast<ISteamClient017 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient018") == 0) {
-            steam_client = static_cast<ISteamClient018 *>(get_steam_client());
+            return static_cast<ISteamClient018 *>(client_ptr);
         } else if (strcmp(ver, "SteamClient019") == 0) {
-            steam_client = static_cast<ISteamClient019 *>(get_steam_client());
-        } else if (strcmp(ver, "SteamClient020") == 0) {
-            steamclient_has_ipv6_functions_flag = true;
-            steam_client = static_cast<ISteamClient020 *>(get_steam_client());
+            return static_cast<ISteamClient019 *>(client_ptr);
+        }
+        
+        steamclient_has_ipv6_functions_flag = true;
+        if (strcmp(ver, "SteamClient020") == 0) {
+            return static_cast<ISteamClient020 *>(client_ptr);
         } else if (strcmp(ver, STEAMCLIENT_INTERFACE_VERSION) == 0) {
-            steamclient_has_ipv6_functions_flag = true;
-            steam_client = static_cast<ISteamClient *>(get_steam_client());
-        } else {
-            PRINT_DEBUG("requested unknown steamclient version '%s'", ver);
-            get_steam_client()->report_missing_impl_and_exit(ver, EMU_FUNC_NAME);
+            return static_cast<ISteamClient *>(client_ptr);
         }
     }
     
-    return steam_client;
+    client_ptr->report_missing_impl_and_exit(ver, EMU_FUNC_NAME);
 }
 
 STEAMAPI_API void * S_CALLTYPE SteamInternal_CreateInterface( const char *ver )
@@ -490,7 +491,7 @@ STEAMAPI_API void S_CALLTYPE SteamAPI_SetMiniDumpComment( const char *pchMsg )
 // and call SteamAPI_ReleaseCurrentThreadMemory regularly on other threads.
 STEAMAPI_API void S_CALLTYPE SteamAPI_RunCallbacks()
 {
-    PRINT_DEBUG_ENTRY();
+    // PRINT_DEBUG_ENTRY();
     get_steam_client()->RunCallbacks(true, false);
     //std::this_thread::sleep_for(std::chrono::microseconds(1)); //fixes resident evil revelations lagging. (Seems to work fine without this right now, commenting out)
 }
@@ -574,7 +575,7 @@ STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_IsSteamRunning()
 // NOT THREADSAFE - do not call from multiple threads simultaneously.
 STEAMAPI_API void Steam_RunCallbacks( HSteamPipe hSteamPipe, bool bGameServerCallbacks )
 {
-    PRINT_DEBUG_ENTRY();
+    // PRINT_DEBUG_ENTRY();
 
     SteamAPI_RunCallbacks();
 
@@ -1006,7 +1007,7 @@ STEAMAPI_API void SteamGameServer_Shutdown()
 
 STEAMAPI_API void SteamGameServer_RunCallbacks()
 {
-    PRINT_DEBUG_ENTRY();
+    // PRINT_DEBUG_ENTRY();
     get_steam_client()->RunCallbacks(false, true);
 }
 
@@ -1026,7 +1027,7 @@ STEAMAPI_API ISteamClient *SteamGameServerClient()
 {
     PRINT_DEBUG("old");
     if (!get_steam_clientserver_old()->IsServerInit()) return NULL;
-    return (ISteamClient *)SteamInternal_CreateInterface(old_client); 
+    return reinterpret_cast<ISteamClient *>(SteamInternal_CreateInterface(old_client)); 
 }
 
 STEAMAPI_API uint32 SteamGameServer_GetIPCCallCount()
@@ -1132,7 +1133,7 @@ STEAMAPI_API steam_bool S_CALLTYPE SteamAPI_ManualDispatch_GetNextCallback( HSte
     }
 
     if (q->empty()) {
-        PRINT_DEBUG("error queue is empty");
+        //PRINT_DEBUG("error queue is empty");
         return false;
     }
 
@@ -1320,25 +1321,37 @@ STEAMCLIENT_API steam_bool Steam_BGetCallback( HSteamPipe hSteamPipe, CallbackMs
 
 STEAMCLIENT_API void Steam_FreeLastCallback( HSteamPipe hSteamPipe )
 {
-    PRINT_DEBUG("Steam_FreeLastCallback %i", hSteamPipe);
+    //PRINT_DEBUG("%i", hSteamPipe);
     SteamAPI_ManualDispatch_FreeLastCallback( hSteamPipe );
 }
 
 STEAMCLIENT_API steam_bool Steam_GetAPICallResult( HSteamPipe hSteamPipe, SteamAPICall_t hSteamAPICall, void* pCallback, int cubCallback, int iCallbackExpected, bool* pbFailed )
 {
-    PRINT_DEBUG("%i %llu %i %i", hSteamPipe, hSteamAPICall, cubCallback, iCallbackExpected);
+    //PRINT_DEBUG("%i %llu %i %i", hSteamPipe, hSteamAPICall, cubCallback, iCallbackExpected);
     return SteamAPI_ManualDispatch_GetAPICallResult(hSteamPipe, hSteamAPICall, pCallback, cubCallback, iCallbackExpected, pbFailed);
 }
 
-STEAMCLIENT_API void *CreateInterface( const char *pName, int *pReturnCode )
+STEAMCLIENT_API void* CreateInterface( const char *pName, int *pReturnCode )
 {
     PRINT_DEBUG("%s %p", pName, pReturnCode);
-    return create_client_interface(pName);
+    auto ptr = create_client_interface(pName);
+    if (ptr) {
+        if (pReturnCode) *pReturnCode = 1;
+    } else {
+        if (pReturnCode) *pReturnCode = 0;
+    }
+    return ptr;
 }
 
 STEAMCLIENT_API void Breakpad_SteamMiniDumpInit( uint32 a, const char *b, const char *c )
 {
     PRINT_DEBUG_TODO();
+}
+
+STEAMCLIENT_API void Breakpad_SteamSendMiniDump( void *a, uint32 b )
+{
+    PRINT_DEBUG_TODO();
+    PRINT_DEBUG("  app is sending a crash dump! [XXXXXXXXXXXXXXXXXXXXXXXXXXX]");
 }
 
 STEAMCLIENT_API void Breakpad_SteamSetAppID( uint32 unAppID )
@@ -1363,19 +1376,35 @@ STEAMCLIENT_API void Breakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId( i
     PRINT_DEBUG("  app is writing a crash dump! [XXXXXXXXXXXXXXXXXXXXXXXXXXX]");
 }
 
-STEAMCLIENT_API bool Steam_BConnected( HSteamUser hUser, HSteamPipe hSteamPipe )
+STEAMCLIENT_API steam_bool Steam_BConnected( HSteamUser hUser, HSteamPipe hSteamPipe )
 {
     PRINT_DEBUG_ENTRY();
     return true;
 }
 
-STEAMCLIENT_API bool Steam_BLoggedOn( HSteamUser hUser, HSteamPipe hSteamPipe )
+STEAMCLIENT_API steam_bool Steam_BLoggedOn( HSteamUser hUser, HSteamPipe hSteamPipe )
 {
-    PRINT_DEBUG_ENTRY();
-    return true;
+    PRINT_DEBUG("%i %i", hUser, hSteamPipe);
+    Steam_Client *steam_client = get_steam_client();
+
+    auto pipe_it = steam_client->steam_pipes.find(hSteamPipe);
+    if (steam_client->steam_pipes.end() == pipe_it) {
+        return false;
+    }
+
+    class Settings *settings_tmp{};
+    if (pipe_it->second == Steam_Pipe::SERVER) {
+        settings_tmp = steam_client->settings_server;
+    } else if (pipe_it->second == Steam_Pipe::CLIENT) {
+        settings_tmp = steam_client->settings_client;
+    } else {
+        return false;
+    }
+
+    return !settings_tmp->is_offline();
 }
 
-STEAMCLIENT_API bool Steam_BReleaseSteamPipe( HSteamPipe hSteamPipe )
+STEAMCLIENT_API steam_bool Steam_BReleaseSteamPipe( HSteamPipe hSteamPipe )
 {
     PRINT_DEBUG_TODO();
     return false;
@@ -1405,19 +1434,21 @@ STEAMCLIENT_API HSteamPipe Steam_CreateSteamPipe()
     return 0;
 }
 
-STEAMCLIENT_API bool Steam_GSBLoggedOn( void *phSteamHandle )
+STEAMCLIENT_API steam_bool Steam_GSBLoggedOn( void *phSteamHandle )
 {
     PRINT_DEBUG_TODO();
     return false;
 }
 
-STEAMCLIENT_API bool Steam_GSBSecure( void *phSteamHandle)
+STEAMCLIENT_API steam_bool Steam_GSBSecure( void *phSteamHandle)
 {
     PRINT_DEBUG_TODO();
     return false;
 }
 
-STEAMCLIENT_API bool Steam_GSGetSteam2GetEncryptionKeyToSendToNewClient( void *phSteamHandle, void *pvEncryptionKey, uint32 *pcbEncryptionKey, uint32 cbMaxEncryptionKey )
+// latest steamclient
+STEAMCLIENT_API steam_bool Steam_GSGetSteam2GetEncryptionKeyToSendToNewClient(void* phSteamHandle)
+//STEAMCLIENT_API steam_bool Steam_GSGetSteam2GetEncryptionKeyToSendToNewClient( void *phSteamHandle, void *pvEncryptionKey, uint32 *pcbEncryptionKey, uint32 cbMaxEncryptionKey )
 {
     PRINT_DEBUG_TODO();
     return false;
@@ -1439,48 +1470,63 @@ STEAMCLIENT_API void Steam_GSLogOn( void *phSteamHandle )
     PRINT_DEBUG_TODO();
 }
 
-STEAMCLIENT_API bool Steam_GSRemoveUserConnect( void *phSteamHandle, uint32 unUserID )
+STEAMCLIENT_API steam_bool Steam_GSRemoveUserConnect(void* phSteamHandle)
+//STEAMCLIENT_API steam_bool Steam_GSRemoveUserConnect( void *phSteamHandle, uint32 unUserID )
 {
     PRINT_DEBUG_TODO();
     return false;
 }
 
-STEAMCLIENT_API bool Steam_GSSendSteam2UserConnect( void *phSteamHandle, uint32 unUserID, const void *pvRawKey, uint32 unKeyLen, uint32 unIPPublic, uint16 usPort, const void *pvCookie, uint32 cubCookie )
+STEAMCLIENT_API steam_bool Steam_GSSendSteam2UserConnect(void* phSteamHandle)
+//STEAMCLIENT_API steam_bool Steam_GSSendSteam2UserConnect( void *phSteamHandle, uint32 unUserID, const void *pvRawKey, uint32 unKeyLen, uint32 unIPPublic, uint16 usPort, const void *pvCookie, uint32 cubCookie )
 {
     PRINT_DEBUG_TODO();
     return false;
 }
 
-STEAMCLIENT_API bool Steam_GSSendSteam3UserConnect( void *phSteamHandle, uint64 steamID, uint32 unIPPublic, const void *pvCookie, uint32 cubCookie )
+STEAMCLIENT_API steam_bool Steam_GSSendSteam3UserConnect(void* phSteamHandle)
+//STEAMCLIENT_API steam_bool Steam_GSSendSteam3UserConnect( void *phSteamHandle, uint64 steamID, uint32 unIPPublic, const void *pvCookie, uint32 cubCookie )
 {
     PRINT_DEBUG_TODO();
     return false;
 }
 
-STEAMCLIENT_API bool Steam_GSSendUserDisconnect( void *phSteamHandle, uint64 ulSteamID, uint32 unUserID )
+STEAMCLIENT_API steam_bool Steam_GSSendUserDisconnect(void* phSteamHandle)
+//STEAMCLIENT_API steam_bool Steam_GSSendUserDisconnect( void *phSteamHandle, uint64 ulSteamID, uint32 unUserID )
 {
     PRINT_DEBUG_TODO();
     return false;
 }
 
-STEAMCLIENT_API bool Steam_GSSendUserStatusResponse( void *phSteamHandle, uint64 ulSteamID, int nSecondsConnected, int nSecondsSinceLast )
+STEAMCLIENT_API steam_bool Steam_GSSendUserStatusResponse()
+//STEAMCLIENT_API steam_bool Steam_GSSendUserStatusResponse( void *phSteamHandle, uint64 ulSteamID, int nSecondsConnected, int nSecondsSinceLast )
 {
     PRINT_DEBUG_TODO();
     return false;
 }
 
-STEAMCLIENT_API bool Steam_GSSetServerType( void *phSteamHandle, int32 nAppIdServed, uint32 unServerFlags, uint32 unGameIP, uint32 unGamePort, const char *pchGameDir, const char *pchVersion )
+// Changed later, idk when.
+STEAMCLIENT_API steam_bool Steam_GSSetServerType(void* phSteamHandle, int32 a2)
+//STEAMCLIENT_API steam_bool Steam_GSSetServerType( void *phSteamHandle, int32 nAppIdServed, uint32 unServerFlags, uint32 unGameIP, uint32 unGamePort, const char *pchGameDir, const char *pchVersion )
 {
     PRINT_DEBUG_TODO();
     return false;
 }
 
+STEAMCLIENT_API int64 Steam_GSSetSpawnCount(void* phSteamHandle)
+{
+    PRINT_DEBUG_TODO();
+    return 0;
+}
+
+/*
 STEAMCLIENT_API void Steam_GSSetSpawnCount( void *phSteamHandle, uint32 ucSpawn )
 {
     PRINT_DEBUG_TODO();
 }
-
-STEAMCLIENT_API bool Steam_GSUpdateStatus( void *phSteamHandle, int cPlayers, int cPlayersMax, int cBotPlayers, const char *pchServerName, const char *pchMapName )
+*/
+STEAMCLIENT_API steam_bool Steam_GSUpdateStatus(void* phSteamHandle)
+//STEAMCLIENT_API steam_bool Steam_GSUpdateStatus( void *phSteamHandle, int cPlayers, int cPlayersMax, int cBotPlayers, const char *pchServerName, const char *pchMapName )
 {
     PRINT_DEBUG_TODO();
     return false;
@@ -1489,13 +1535,31 @@ STEAMCLIENT_API bool Steam_GSUpdateStatus( void *phSteamHandle, int cPlayers, in
 STEAMCLIENT_API void* Steam_GetGSHandle( HSteamUser hUser, HSteamPipe hSteamPipe )
 {
     PRINT_DEBUG_TODO();
-    return NULL;
+    return nullptr;
 }
 
 STEAMCLIENT_API int Steam_InitiateGameConnection( HSteamUser hUser, HSteamPipe hSteamPipe, void *pBlob, int cbMaxBlob, uint64 steamID, int nGameAppID, uint32 unIPServer, uint16 usPortServer, bool bSecure )
 {
     PRINT_DEBUG_TODO();
     return 0;
+}
+
+// https://github.com/ValveSoftware/Proton/blob/962bbc4e74dde0643a6edab7c845bc628601f23f/lsteamclient/steamclient_main.c#L579-L586
+STEAMCLIENT_API steam_bool Steam_IsKnownInterface( const char *pchVersion )
+{
+    PRINT_DEBUG("'%s'", pchVersion);
+    
+    // real client doesn't validate if the arg was null
+    if (!pchVersion) return false;
+
+    bool found = client_known_interfaces.count(pchVersion);
+    
+    PRINT_DEBUG("  result=%i", (int)found);
+    if (!found) {
+        get_steam_client()->report_missing_impl(pchVersion, EMU_FUNC_NAME);
+    }
+
+    return found;
 }
 
 STEAMCLIENT_API void Steam_LogOff( HSteamUser hUser, HSteamPipe hSteamPipe )
@@ -1506,6 +1570,13 @@ STEAMCLIENT_API void Steam_LogOff( HSteamUser hUser, HSteamPipe hSteamPipe )
 STEAMCLIENT_API void Steam_LogOn( HSteamUser hUser, HSteamPipe hSteamPipe, uint64 ulSteamID )
 {
     PRINT_DEBUG_TODO();
+}
+
+// https://github.com/ValveSoftware/Proton/blob/962bbc4e74dde0643a6edab7c845bc628601f23f/lsteamclient/steamclient_main.c#L588-L594
+STEAMCLIENT_API void Steam_NotifyMissingInterface(HSteamPipe hSteamPipe, const char *pchVersion )
+{
+    PRINT_DEBUG("XXXXXXXXXXXXX '%s' %i", pchVersion, hSteamPipe);
+    get_steam_client()->report_missing_impl(pchVersion, EMU_FUNC_NAME);
 }
 
 STEAMCLIENT_API void Steam_ReleaseThreadLocalMemory(bool thread_exit)

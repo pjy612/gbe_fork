@@ -1,4 +1,0 @@
-steam[client]
-pyinstaller
-requests
-certifi

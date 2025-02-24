@@ -51,11 +51,13 @@
 #include "steam_parties.h"
 #include "steam_remoteplay.h"
 #include "steam_tv.h"
+#include "steam_billing.h"
 
 #include "steam_gameserver.h"
 #include "steam_gameserverstats.h"
 #include "steam_gamestats.h"
 #include "steam_timeline.h"
+#include "steam_app_disable_update.h"
 #include "steam_masterserver_updater.h"
 
 #include "overlay/steam_overlay.h"
@@ -67,6 +69,7 @@ enum Steam_Pipe {
 };
 
 class Steam_Client :
+public ISteamClient006,
 public ISteamClient007,
 public ISteamClient008,
 public ISteamClient009,
@@ -140,6 +143,8 @@ public:
     Steam_TV *steam_tv{};
     Steam_GameStats *steam_gamestats{};
     Steam_Timeline *steam_timeline{};
+    Steam_App_Disable_Update *steam_app_disable_update{};
+    Steam_Billing *steam_billing{};
 
     Steam_GameServer *steam_gameserver{};
     Steam_Utils *steam_gameserver_utils{};
@@ -154,6 +159,8 @@ public:
     Steam_Networking_Messages *steam_gameserver_networking_messages{};
     Steam_Game_Coordinator *steam_gameserver_game_coordinator{};
     Steam_Masterserver_Updater *steam_masterserver_updater{};
+    Steam_GameStats *steam_gameserver_gamestats{};
+    
     Steam_AppTicket *steam_app_ticket{};
 
     Steam_Overlay* steam_overlay{};
@@ -241,6 +248,11 @@ public:
 	// steam timeline
 	ISteamTimeline *GetISteamTimeline( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion );
 
+	// steam app disable update
+	ISteamAppDisableUpdate *GetISteamAppDisableUpdate( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion );
+
+    // steam billing
+    ISteamBilling *GetISteamBilling( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion );
 
 	// Deprecated. Applications should use SteamAPI_RunCallbacks() or SteamGameServer_RunCallbacks() instead.
 	STEAM_PRIVATE_API( void RunFrame() );
@@ -336,6 +348,23 @@ public:
 
     void DestroyAllInterfaces();
 
+    // older sdk ----------------------------------------------------------
+    // https://github.com/ValveSoftware/Proton/blob/proton_9.0/lsteamclient/steamworks_sdk_099v/isteamclient.h
+    // https://workshop.perforce.com/files/guest/knut_wikstrom/ValveSDKCode/public/steam/isteamclient.h
+
+    // creates a global instance of a steam user, so that other processes can share it
+    // used by the steam UI, to share it's account info/connection with any games it launches
+    // fails (returns NULL) if an existing instance already exists
+    HSteamUser CreateGlobalUser( HSteamPipe *phSteamPipe );
+    // retrieves the IVac interface associated with the handle
+    // there is normally only one instance of VAC running, but using this connects it to the right user/account
+    void *GetIVAC( HSteamUser hSteamUser );
+    // returns the name of a universe
+    const char *GetUniverseName( EUniverse eUniverse );
+    void *GetISteamBilling_old( HSteamUser hSteamUser, HSteamPipe hSteamPipe, const char *pchVersion );
+    // older sdk ----------------------------------------------------------
+
+    void report_missing_impl(std::string_view itf, std::string_view caller);
     [[noreturn]] void report_missing_impl_and_exit(std::string_view itf, std::string_view caller);
 
 };

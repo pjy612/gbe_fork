@@ -376,6 +376,62 @@ static void load_overlay_appearance(class Settings *settings_client, class Setti
                 auto pos = Overlay_Appearance::translate_notification_position(value);
                 settings_client->overlay_appearance.chat_msg_pos = pos;
                 settings_server->overlay_appearance.chat_msg_pos = pos;
+            // >>> FPS background
+            } else if (name.compare("Stats_Background_R") == 0) {
+                float val = std::stof(value, NULL);
+                settings_client->overlay_appearance.stats_background_r = val;
+                settings_server->overlay_appearance.stats_background_r = val;
+            } else if (name.compare("Stats_Background_G") == 0) {
+                float val = std::stof(value, NULL);
+                settings_client->overlay_appearance.stats_background_g = val;
+                settings_server->overlay_appearance.stats_background_g = val;
+            } else if (name.compare("Stats_Background_B") == 0) {
+                float val = std::stof(value, NULL);
+                settings_client->overlay_appearance.stats_background_b = val;
+                settings_server->overlay_appearance.stats_background_b = val;
+            } else if (name.compare("Stats_Background_A") == 0) {
+                float val = std::stof(value, NULL);
+                settings_client->overlay_appearance.stats_background_a = val;
+                settings_server->overlay_appearance.stats_background_a = val;
+            // FPS background END <<<
+            // >>> FPS text color
+            } else if (name.compare("Stats_Text_R") == 0) {
+                float val = std::stof(value, NULL);
+                settings_client->overlay_appearance.stats_text_r = val;
+                settings_server->overlay_appearance.stats_text_r = val;
+            } else if (name.compare("Stats_Text_G") == 0) {
+                float val = std::stof(value, NULL);
+                settings_client->overlay_appearance.stats_text_g = val;
+                settings_server->overlay_appearance.stats_text_g = val;
+            } else if (name.compare("Stats_Text_B") == 0) {
+                float val = std::stof(value, NULL);
+                settings_client->overlay_appearance.stats_text_b = val;
+                settings_server->overlay_appearance.stats_text_b = val;
+            } else if (name.compare("Stats_Text_A") == 0) {
+                float val = std::stof(value, NULL);
+                settings_client->overlay_appearance.stats_text_a = val;
+                settings_server->overlay_appearance.stats_text_a = val;
+            // FPS text color END <<<
+            // >>> FPS position
+            } else if (name.compare("Stats_Pos_x") == 0) {
+                auto pos = std::stof(value);
+                if (pos < 0) {
+                    pos = 0;
+                } else if (pos > 1.0f) {
+                    pos = 1.0f;
+                }
+                settings_client->overlay_stats_pos_x = pos;
+                settings_server->overlay_stats_pos_x = pos;
+            } else if (name.compare("Stats_Pos_y") == 0) {
+                auto pos = std::stof(value);
+                if (pos < 0) {
+                    pos = 0;
+                } else if (pos > 1.0f) {
+                    pos = 1.0f;
+                }
+                settings_client->overlay_stats_pos_y = pos;
+                settings_server->overlay_stats_pos_y = pos;
+            // FPS position END <<<
             } else {
                 PRINT_DEBUG("unknown overlay appearance setting");
             }
@@ -566,12 +622,6 @@ static uint16 parse_listen_port(class Local_Storage *local_storage)
     uint16 port = static_cast<uint16>(ini.GetLongValue("main::connectivity", "listen_port"));
     if (port == 0) {
         port = DEFAULT_PORT;
-        save_global_ini_value(
-            local_storage,
-            config_ini_main,
-            "main::connectivity", "listen_port", IniValue((long)port),
-            "change the UDP/TCP port the emulator listens on"
-        );
     }
     return port;
 }
@@ -940,6 +990,12 @@ static void parse_installed_app_Ids(class Settings *settings_client, class Setti
 static const auto one_week_ago_epoch = std::chrono::duration_cast<std::chrono::seconds>(
     ( startup_time - std::chrono::hours(24 * 7) ).time_since_epoch()
 ).count();
+static const auto two_week_ago_epoch = std::chrono::duration_cast<std::chrono::seconds>(
+    ( startup_time - std::chrono::hours(24 * 7 * 2) ).time_since_epoch()
+).count();
+static const auto three_week_ago_epoch = std::chrono::duration_cast<std::chrono::seconds>(
+    ( startup_time - std::chrono::hours(24 * 7 * 3) ).time_since_epoch()
+).count();
 
 static size_t get_file_size_safe(const std::string &filepath, const std::string &basepath, int32 default_val = 0)
 {
@@ -963,7 +1019,16 @@ static std::string get_mod_preview_url(const std::string &previewFileName, const
     } else {
         auto settings_folder = std::string(Local_Storage::get_game_settings_path());
         std::replace(settings_folder.begin(), settings_folder.end(), '\\', '/');
-        return "file://" + settings_folder + "mod_images/" + mod_id + "/" + previewFileName;
+        
+        return
+
+#if defined(__WINDOWS__)
+            "file:///"
+#else // on Linux absolute paths start like this: /my/path, so the 3rd slash is already appended
+            "file://"
+#endif
+
+            + settings_folder + "mod_images/" + mod_id + "/" + previewFileName;
     }
     
 }
@@ -992,8 +1057,8 @@ static void try_parse_mods_file(class Settings *settings_client, Settings *setti
             newMod.fileType = k_EWorkshopFileTypeCommunity;
             newMod.description = mod.value().value("description", std::string(""));
             newMod.steamIDOwner = mod.value().value("steam_id_owner", settings_client->get_local_steam_id().ConvertToUint64());
-            newMod.timeCreated = mod.value().value("time_created", (uint32)one_week_ago_epoch);
-            newMod.timeUpdated = mod.value().value("time_updated", (uint32)one_week_ago_epoch);
+            newMod.timeCreated = mod.value().value("time_created", (uint32)three_week_ago_epoch);
+            newMod.timeUpdated = mod.value().value("time_updated", (uint32)two_week_ago_epoch);
             newMod.timeAddedToUserList = mod.value().value("time_added", (uint32)one_week_ago_epoch);
             newMod.visibility = k_ERemoteStoragePublishedFileVisibilityPublic;
             newMod.banned = false;
@@ -1015,7 +1080,7 @@ static void try_parse_mods_file(class Settings *settings_client, Settings *setti
             }
             newMod.previewFileSize = mod.value().value("preview_filesize", preview_filesize);
 
-            newMod.total_files_sizes = mod.value().value("total_files_sizes", primary_filesize);
+            newMod.total_files_sizes = mod.value().value("total_files_sizes", newMod.primaryFileSize);
             newMod.min_game_branch = mod.value().value("min_game_branch", "");
             newMod.max_game_branch = mod.value().value("max_game_branch", "");
             
@@ -1053,7 +1118,8 @@ static void try_parse_mods_file(class Settings *settings_client, Settings *setti
             PRINT_DEBUG("    workshop_item_url: '%s'", newMod.workshopItemURL.c_str());
             PRINT_DEBUG("    preview_url: '%s'", newMod.previewURL.c_str());
         } catch (std::exception& e) {
-            PRINT_DEBUG("MODLOADER ERROR: %s", e.what());
+            const char *errorMessage = e.what();
+            PRINT_DEBUG("MODLOADER ERROR: %s", errorMessage);
         }
     }
 }
@@ -1075,8 +1141,8 @@ static void try_detect_mods_folder(class Settings *settings_client, Settings *se
             newMod.fileType = k_EWorkshopFileTypeCommunity;
             newMod.description = "mod #" + mod_folder;
             newMod.steamIDOwner = settings_client->get_local_steam_id().ConvertToUint64();
-            newMod.timeCreated = (uint32)one_week_ago_epoch;
-            newMod.timeUpdated = (uint32)one_week_ago_epoch;
+            newMod.timeCreated = (uint32)three_week_ago_epoch;
+            newMod.timeUpdated = (uint32)two_week_ago_epoch;
             newMod.timeAddedToUserList = (uint32)one_week_ago_epoch;
             newMod.visibility = k_ERemoteStoragePublishedFileVisibilityPublic;
             newMod.banned = false;
@@ -1114,7 +1180,7 @@ static void try_detect_mods_folder(class Settings *settings_client, Settings *se
             PRINT_DEBUG("    preview_filename: '%s'", newMod.previewFileName.c_str());
             PRINT_DEBUG("    preview_filesize: %i bytes", newMod.previewFileSize);
             PRINT_DEBUG("    preview file handle: %llu", settings_client->getMod(newMod.id).handlePreviewFile);
-            PRINT_DEBUG("    total_files_sizes: '%s'", newMod.total_files_sizes);
+            PRINT_DEBUG("    total_files_sizes: '%llu'", newMod.total_files_sizes);
             PRINT_DEBUG("    min_game_branch: '%s'", newMod.min_game_branch.c_str());
             PRINT_DEBUG("    max_game_branch: '%s'", newMod.max_game_branch.c_str());
             PRINT_DEBUG("    workshop_item_url: '%s'", newMod.workshopItemURL.c_str());
@@ -1205,6 +1271,10 @@ static bool parse_branches_file(
     if (!local_storage->load_json(branches_file, branches) && !force_load) {
         return false;
     }
+
+    settings_client->is_beta_branch = ini.GetBoolValue("app::general", "is_beta_branch", settings_client->is_beta_branch);
+    settings_server->is_beta_branch = ini.GetBoolValue("app::general", "is_beta_branch", settings_server->is_beta_branch);
+
 
     // app::general::branch_name
     std::string selected_branch = common_helpers::string_strip(ini.GetValue("app::general", "branch_name", ""));
@@ -1343,6 +1413,49 @@ static void parse_overlay_general_config(class Settings *settings_client, class 
     settings_client->disable_overlay_warning_local_save = ini.GetBoolValue("overlay::general", "disable_warning_local_save", settings_client->disable_overlay_warning_local_save);
     settings_server->disable_overlay_warning_local_save = ini.GetBoolValue("overlay::general", "disable_warning_local_save", settings_server->disable_overlay_warning_local_save);
 
+    settings_client->overlay_upload_achs_icons_to_gpu = ini.GetBoolValue("overlay::general", "upload_achievements_icons_to_gpu", settings_client->overlay_upload_achs_icons_to_gpu);
+    settings_server->overlay_upload_achs_icons_to_gpu = ini.GetBoolValue("overlay::general", "upload_achievements_icons_to_gpu", settings_server->overlay_upload_achs_icons_to_gpu);
+
+    settings_client->overlay_always_show_user_info = ini.GetBoolValue("overlay::general", "overlay_always_show_user_info", settings_client->overlay_always_show_user_info);
+    settings_server->overlay_always_show_user_info = ini.GetBoolValue("overlay::general", "overlay_always_show_user_info", settings_server->overlay_always_show_user_info);
+
+    settings_client->overlay_always_show_fps = ini.GetBoolValue("overlay::general", "overlay_always_show_fps", settings_client->overlay_always_show_fps);
+    settings_server->overlay_always_show_fps = ini.GetBoolValue("overlay::general", "overlay_always_show_fps", settings_server->overlay_always_show_fps);
+    
+    settings_client->overlay_always_show_frametime = ini.GetBoolValue("overlay::general", "overlay_always_show_frametime", settings_client->overlay_always_show_frametime);
+    settings_server->overlay_always_show_frametime = ini.GetBoolValue("overlay::general", "overlay_always_show_frametime", settings_server->overlay_always_show_frametime);
+
+    settings_client->overlay_always_show_playtime = ini.GetBoolValue("overlay::general", "overlay_always_show_playtime", settings_client->overlay_always_show_playtime);
+    settings_server->overlay_always_show_playtime = ini.GetBoolValue("overlay::general", "overlay_always_show_playtime", settings_server->overlay_always_show_playtime);
+
+    {
+        auto val = ini.GetLongValue("overlay::general", "fps_averaging_window", settings_client->overlay_fps_avg_window);
+        if (val > 0) {
+            settings_client->overlay_fps_avg_window = val;        
+        }
+    }
+
+    {
+        auto val = ini.GetLongValue("overlay::general", "fps_averaging_window", settings_server->overlay_fps_avg_window);
+        if (val > 0) {
+            settings_server->overlay_fps_avg_window = val;        
+        }
+    }
+    
+}
+
+// main::misc::steam_game_stats_reports_dir
+static void parse_steam_game_stats_reports_dir(class Settings *settings_client, class Settings *settings_server)
+{
+    std::string line(common_helpers::string_strip(ini.GetValue("main::misc", "steam_game_stats_reports_dir", "")));
+    if (line.size()) {
+        auto folder = common_helpers::to_absolute(line, get_full_program_path());
+        if (folder.size()) {
+            PRINT_DEBUG("ISteamGameStats reports will be saved to '%s'", folder.c_str());
+            settings_client->steam_game_stats_reports_dir = folder;
+            settings_server->steam_game_stats_reports_dir = folder;
+        }
+    }
 }
 
 // mainly enable/disable features
@@ -1358,20 +1471,8 @@ static void parse_simple_features(class Settings *settings_client, class Setting
     settings_client->disable_account_avatar = !ini.GetBoolValue("main::general", "enable_account_avatar", !settings_client->disable_account_avatar);
     settings_server->disable_account_avatar = !ini.GetBoolValue("main::general", "enable_account_avatar", !settings_server->disable_account_avatar);
 
-    settings_client->is_beta_branch = ini.GetBoolValue("main::general", "is_beta_branch", settings_client->is_beta_branch);
-    settings_server->is_beta_branch = ini.GetBoolValue("main::general", "is_beta_branch", settings_server->is_beta_branch);
-
     settings_client->steam_deck = ini.GetBoolValue("main::general", "steam_deck", settings_client->steam_deck);
     settings_server->steam_deck = ini.GetBoolValue("main::general", "steam_deck", settings_server->steam_deck);
-
-    settings_client->disable_leaderboards_create_unknown = ini.GetBoolValue("main::general", "disable_leaderboards_create_unknown", settings_client->disable_leaderboards_create_unknown);
-    settings_server->disable_leaderboards_create_unknown = ini.GetBoolValue("main::general", "disable_leaderboards_create_unknown", settings_server->disable_leaderboards_create_unknown);
-
-    settings_client->allow_unknown_stats = ini.GetBoolValue("main::general", "allow_unknown_stats", settings_client->allow_unknown_stats);
-    settings_server->allow_unknown_stats = ini.GetBoolValue("main::general", "allow_unknown_stats", settings_server->allow_unknown_stats);
-
-    settings_client->save_only_higher_stat_achievement_progress = ini.GetBoolValue("main::general", "save_only_higher_stat_achievement_progress", settings_client->save_only_higher_stat_achievement_progress);
-    settings_server->save_only_higher_stat_achievement_progress = ini.GetBoolValue("main::general", "save_only_higher_stat_achievement_progress", settings_server->save_only_higher_stat_achievement_progress);
 
     settings_client->immediate_gameserver_stats = ini.GetBoolValue("main::general", "immediate_gameserver_stats", settings_client->immediate_gameserver_stats);
     settings_server->immediate_gameserver_stats = ini.GetBoolValue("main::general", "immediate_gameserver_stats", settings_server->immediate_gameserver_stats);
@@ -1379,8 +1480,8 @@ static void parse_simple_features(class Settings *settings_client, class Setting
     settings_client->matchmaking_server_details_via_source_query = ini.GetBoolValue("main::general", "matchmaking_server_details_via_source_query", settings_client->matchmaking_server_details_via_source_query);
     settings_server->matchmaking_server_details_via_source_query = ini.GetBoolValue("main::general", "matchmaking_server_details_via_source_query", settings_server->matchmaking_server_details_via_source_query);
 
-    settings_client->matchmaking_server_list_always_lan_type = ini.GetBoolValue("main::general", "matchmaking_server_list_actual_type", settings_client->matchmaking_server_list_always_lan_type);
-    settings_server->matchmaking_server_list_always_lan_type = ini.GetBoolValue("main::general", "matchmaking_server_list_actual_type", settings_server->matchmaking_server_list_always_lan_type);
+    settings_client->matchmaking_server_list_always_lan_type = !ini.GetBoolValue("main::general", "matchmaking_server_list_actual_type", !settings_client->matchmaking_server_list_always_lan_type);
+    settings_server->matchmaking_server_list_always_lan_type = !ini.GetBoolValue("main::general", "matchmaking_server_list_actual_type", !settings_server->matchmaking_server_list_always_lan_type);
 
 
     // [main::connectivity]
@@ -1415,6 +1516,30 @@ static void parse_simple_features(class Settings *settings_client, class Setting
 
     settings_client->enable_builtin_preowned_ids = ini.GetBoolValue("main::misc", "enable_steam_preowned_ids", settings_client->enable_builtin_preowned_ids);
     settings_server->enable_builtin_preowned_ids = ini.GetBoolValue("main::misc", "enable_steam_preowned_ids", settings_server->enable_builtin_preowned_ids);
+}
+
+// [main::stats]
+static void parse_stats_features(class Settings *settings_client, class Settings *settings_server)
+{
+    settings_client->disable_leaderboards_create_unknown = ini.GetBoolValue("main::stats", "disable_leaderboards_create_unknown", settings_client->disable_leaderboards_create_unknown);
+    settings_server->disable_leaderboards_create_unknown = ini.GetBoolValue("main::stats", "disable_leaderboards_create_unknown", settings_server->disable_leaderboards_create_unknown);
+
+    settings_client->allow_unknown_stats = ini.GetBoolValue("main::stats", "allow_unknown_stats", settings_client->allow_unknown_stats);
+    settings_server->allow_unknown_stats = ini.GetBoolValue("main::stats", "allow_unknown_stats", settings_server->allow_unknown_stats);
+
+    settings_client->stat_achievement_progress_functionality = ini.GetBoolValue("main::stats", "stat_achievement_progress_functionality", settings_client->stat_achievement_progress_functionality);
+    settings_server->stat_achievement_progress_functionality = ini.GetBoolValue("main::stats", "stat_achievement_progress_functionality", settings_server->stat_achievement_progress_functionality);
+
+    settings_client->save_only_higher_stat_achievement_progress = ini.GetBoolValue("main::stats", "save_only_higher_stat_achievement_progress", settings_client->save_only_higher_stat_achievement_progress);
+    settings_server->save_only_higher_stat_achievement_progress = ini.GetBoolValue("main::stats", "save_only_higher_stat_achievement_progress", settings_server->save_only_higher_stat_achievement_progress);
+
+    {
+        long val_client = ini.GetLongValue("main::stats", "paginated_achievements_icons", settings_client->paginated_achievements_icons);
+        settings_client->paginated_achievements_icons = static_cast<int>(val_client);
+
+        long val_server = ini.GetLongValue("main::stats", "paginated_achievements_icons", settings_server->paginated_achievements_icons);
+        settings_server->paginated_achievements_icons = static_cast<int>(val_server);
+    }
 }
 
 
@@ -1670,6 +1795,7 @@ uint32 create_localstorage_settings(Settings **settings_client_out, Settings **s
     settings_server->set_supported_languages(supported_languages);
 
     parse_simple_features(settings_client, settings_server);
+    parse_stats_features(settings_client, settings_server);
 
     parse_dlc(settings_client, settings_server);
     parse_installed_app_Ids(settings_client, settings_server);
@@ -1694,6 +1820,7 @@ uint32 create_localstorage_settings(Settings **settings_client_out, Settings **s
 
     parse_overlay_general_config(settings_client, settings_server);
     load_overlay_appearance(settings_client, settings_server, local_storage);
+    parse_steam_game_stats_reports_dir(settings_client, settings_server);
 
     *settings_client_out = settings_client;
     *settings_server_out = settings_server;

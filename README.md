@@ -1,10 +1,6 @@
 ## :large_orange_diamond: **This is a fork**
 Fork of https://gitlab.com/Mr_Goldberg/goldberg_emulator  
 
-Fork originally make by wizark952.
-
-This is a latest version of his work.
-
 ### Feel free to make a PR.
 
 ---
@@ -33,11 +29,20 @@ This project depends on many third-party libraries and tools, credits to them fo
 ---
 
 # How to use the emu
-* **Always generate the interfaces file using the `find_interfaces` tool.**  
-* **Generate the proper app configuration using the `generate_emu_config` tool.**  
+* **Always generate the interfaces file using the `generate_interfaces` tool.**  
 * **If things don't work, try the `ColdClientLoader` setup.**  
 
-You can find helper guides, scripts, and tools here in this wiki: https://github.com/otavepto/gbe_fork/wiki/Emu-helpers  
+You can find helper guides, scripts, and tools here:
+
+**(These guides, scripts, and tools are maintained by their authors.)**
+
+* **[GBE Fork Tools](https://github.com/Detanup01/gbe_fork_tools)**
+* **[Semuexec](https://gitlab.com/detiam/Semuexec)**
+* **[Steam Emu Utility](https://github.com/turusudiro/SteamEmuUtility)**
+* **[How to use Goldberg Emulator](https://rentry.co/goldberg_emulator)**
+* **[GSE-Generator](https://github.com/brunolee-GIT/GSE-Generator)**
+* **If you created a generator tool create a Feature PR**
+
 You can also find instructions here in [README.release.md](./post_build/README.release.md)  
 
 ---
@@ -62,7 +67,7 @@ You can also find instructions here in [README.release.md](./post_build/README.r
 
  Clone the repo and its submodules **recursively**
  ```shell
- git clone --recurse-submodules -j8 https://github.com/otavepto/gbe_fork.git
+ git clone --recurse-submodules -j8 https://github.com/Detanup01/gbe_fork.git
  ```
  The switch `-j8` is optional, it allows Git to fetch up to 8 submodules
 
@@ -105,7 +110,7 @@ You can also find instructions here in [README.release.md](./post_build/README.r
 
 ### For Linux:
 
-* Ubuntu 22.04 LTS: https://ubuntu.com/download/desktop
+* Ubuntu 20.04 LTS: https://ubuntu.com/download/desktop
 * Ubuntu required packages:
   ```shell
   sudo apt update -y
@@ -123,12 +128,17 @@ You can also find instructions here in [README.release.md](./post_build/README.r
   ```
 * Python 3.10 or above
    ```shell
+   sudo apt update -y
+   sudo apt install -y software-properties-common
    sudo add-apt-repository ppa:deadsnakes/ppa -y
    sudo apt update -y
-   sudo apt install python3.10 -y
+   sudo apt install -y "python3.12"
+   sudo apt install -y "python3.12-dev"
+   sudo apt install -y "python3.12-venv"
+   sudo apt install -y python3-dev
    
    # make sure it works
-   python3.10 --version
+   python3.12 --version
    ```
 
 ### **Building dependencies**
@@ -263,42 +273,6 @@ make help
 
 This will build a release version of the emu in the folder `build/linux/<toolchain>/release`  
 An example script `build_linux_premake.sh` is available, check it out  
-
----
-
-## **Building the tool `generate_emu_config`**
-Navigate to the folder `tools/generate_emu_config/` then  
-
-### On Windows:
-Open CMD then:
-1. Create python virtual environemnt and install the required packages/dependencies
-   ```batch
-   recreate_venv_win.bat
-   ```
-2. Build the tool using `pyinstaller`  
-   ```batch
-   rebuild_win.bat
-   ```
-
-This will build the tool inside `bin\win`
-
-### On Linux:
-Open bash terminal then:
-1. Create python virtual environemnt and install the required packages/dependencies
-   ```shell
-   sudo ./recreate_venv_linux.sh
-   ```  
-   You might need to edit this script to use a different python version.  
-   Find this line and change it:
-   ```shell
-   python_package="python3.10"
-   ``` 
-2. Build the tool using `pyinstaller`  
-   ```shell
-   ./rebuild_linux.sh
-   ```
-
-This will build the tool inside `bin/linux`
 
 ---
 

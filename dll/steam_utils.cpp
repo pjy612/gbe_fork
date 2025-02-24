@@ -81,11 +81,11 @@ bool Steam_Utils::GetImageSize( int iImage, uint32 *pnWidth, uint32 *pnHeight )
 
     if (!iImage || !pnWidth || !pnHeight) return false;
 
-    auto image = settings->images.find(iImage);
-    if (settings->images.end() == image) return false;
+    auto image_info = settings->get_image(iImage);
+    if (!image_info) return false;
 
-    *pnWidth = image->second.width;
-    *pnHeight = image->second.height;
+    *pnWidth = image_info->width;
+    *pnHeight = image_info->height;
     return true;
 }
 
@@ -99,10 +99,10 @@ bool Steam_Utils::GetImageRGBA( int iImage, uint8 *pubDest, int nDestBufferSize 
 
     if (!iImage || !pubDest || nDestBufferSize <= 0) return false;
 
-    auto image = settings->images.find(iImage);
-    if (settings->images.end() == image) return false;
+    auto image_info = settings->get_image(iImage);
+    if (!image_info) return false;
 
-    image->second.data.copy((char *)pubDest, nDestBufferSize);
+    image_info->data.copy((char *)pubDest, nDestBufferSize);
     return true;
 }
 
@@ -184,7 +184,7 @@ bool Steam_Utils::GetAPICallResult( SteamAPICall_t hSteamAPICall, void *pCallbac
 STEAM_PRIVATE_API(
 void Steam_Utils::RunFrame()
 {
-    PRINT_DEBUG_TODO();
+    //PRINT_DEBUG_TODO();
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     // Steam_Client *client = get_steam_client();
     // client ->RunCallbacks(true, false, false);
@@ -255,11 +255,10 @@ SteamAPICall_t Steam_Utils::CheckFileSignature( const char *szFileName )
 {
     PRINT_DEBUG("'%s'", szFileName);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
-    CheckFileSignature_t data;
+    CheckFileSignature_t data{};
     data.m_eCheckFileSignature = k_ECheckFileSignatureValidSignature;
     auto ret = callback_results->addCallResult(data.k_iCallback, &data, sizeof(data));
-    // TODO callback too?
-    // callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
+    callbacks->addCBResult(data.k_iCallback, &data, sizeof(data));
     return ret;
 }
 

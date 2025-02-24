@@ -30,8 +30,32 @@ Steam_Apps::Steam_Apps(Settings *settings, class SteamCallResults *callback_resu
 // If you expect it to exists wait for the AppDataChanged_t after the first failure and ask again
 int Steam_Apps::GetAppData( AppId_t nAppID, const char *pchKey, char *pchValue, int cchValueMax )
 {
-    //TODO
-    PRINT_DEBUG_TODO();
+    PRINT_DEBUG("%u, %p = ['%s'] (%i)", nAppID, pchValue, pchKey, cchValueMax);
+    std::lock_guard lock(global_mutex);
+
+    if (common_helpers::str_cmp_insensitive("subscribed", pchKey)) {
+        bool val = BIsSubscribedApp(nAppID);
+        if (pchValue && cchValueMax >= 2) {
+            strncpy(pchValue, val ? "1" : "0", 2);
+        }
+        return 2;
+    } else if (common_helpers::str_cmp_insensitive("installed", pchKey)) {
+        bool val = BIsAppInstalled(nAppID);
+        if (pchValue && cchValueMax >= 2) {
+            strncpy(pchValue, val ? "1" : "0", 2);
+        }
+        return 2;
+    } else if (common_helpers::str_cmp_insensitive("country", pchKey)) {
+        // TODO this is not exactly how real client does it, but close enough
+        auto country = settings->ip_country.c_str();
+        auto country_lower = common_helpers::to_lower(country && country[0] ? country : "--"); // "--" is an actual value the client returns
+        if (pchValue && cchValueMax >= 3) {
+            strncpy(pchValue, country_lower.c_str(), 3);
+            pchValue[2] = 0;
+        }
+        return 3;
+    }
+
     return 0;
 }
 
@@ -84,8 +108,12 @@ bool Steam_Apps::BIsSubscribedApp( AppId_t appID )
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     if (appID == 0) return false; // steam returns false
     if (appID == UINT32_MAX) return true; // steam returns true
-    if (appID == settings->get_local_game_id().AppID()) return true; // steam returns true
-    return settings->hasDLC(appID);
+    if (appID == settings->get_local_game_id().AppID() || settings->hasDLC(appID)) return true; // steam returns true
+    for (auto &d : settings->depots) {
+        if (d == appID)
+            return true;
+    }
+    return false;
 }
 
 
@@ -112,15 +140,19 @@ uint32 Steam_Apps::GetEarliestPurchaseUnixTime( AppId_t nAppID )
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     if (nAppID == 0) return 0; // steam returns 0
     if (nAppID == UINT32_MAX) return 0; // steam returns 0
+    auto t =
+        // 4 days ago
+        startup_time
+        - std::chrono::hours(24 * 4);
+    auto duration = std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch());
     if (nAppID == settings->get_local_game_id().AppID() || settings->hasDLC(nAppID)) {
-        auto t =
-            // 4 days ago
-            startup_time
-            - std::chrono::hours(24 * 4);
-        auto duration = std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch());
         return (uint32)duration.count();
     }
-
+    for (auto &d : settings->depots) {
+        if (d == nAppID)
+            return (uint32)duration.count();
+    }
+    
     //TODO ?
     return 0;
 }

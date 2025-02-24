@@ -81,6 +81,8 @@ public ISteamNetworkingSockets004,
 public ISteamNetworkingSockets006,
 public ISteamNetworkingSockets008,
 public ISteamNetworkingSockets009,
+public ISteamNetworkingSockets010,
+public ISteamNetworkingSockets011,
 public ISteamNetworkingSockets
 {
     class Settings *settings{};

@@ -161,6 +161,11 @@ bool Settings::is_offline()
     return offline;
 }
 
+void Settings::set_offline(bool offline)
+{
+    this->offline = offline;
+}
+
 uint16 Settings::get_port()
 {
     return port;
@@ -214,6 +219,9 @@ void Settings::addModDetails(PublishedFileId_t id, const Mod_entry &details)
         f->score = details.score;
         f->numChildren = details.numChildren;
         f->previewURL = details.previewURL;
+        f->total_files_sizes = details.total_files_sizes;
+        f->min_game_branch = details.min_game_branch;
+        f->max_game_branch = details.max_game_branch;
     }
 }
 
@@ -346,20 +354,44 @@ const std::map<std::string, Stat_config>& Settings::getStats() const
 
 std::map<std::string, Stat_config>::const_iterator Settings::setStatDefiniton(const std::string &name, const struct Stat_config &stat_config)
 {
-    auto ins_it = stats.insert_or_assign(common_helpers::ascii_to_lowercase(name), stat_config);
+    auto ins_it = stats.insert_or_assign(common_helpers::to_lower(name), stat_config);
     return ins_it.first;
 }
 
 
 int Settings::add_image(const std::string &data, uint32 width, uint32 height)
 {
-    int last = static_cast<int>(images.size()) + 1;
-    struct Image_Data dt;
+    auto previous_it = std::find_if(images.begin(), images.end(), [&](const std::pair<const size_t, Image_Data> &item) {
+        return item.second.data == data
+            && item.second.height == height
+            && item.second.width == width;
+    });
+    if (images.end() != previous_it) {
+        return static_cast<int>(previous_it->first);
+    }
+
+    struct Image_Data dt{};
     dt.width = width;
     dt.height = height;
     dt.data = data;
-    images[last] = dt;
-    return last;
+    
+    auto new_handle = images.size() + 1; // never return 0, it is a bad handle for most ISteamUserStats APIs
+    images[new_handle] = dt;
+
+    return static_cast<int>(new_handle);
+}
+
+Image_Data* Settings::get_image(int handle)
+{
+    if (INVALID_IMAGE_HANDLE == handle || UNLOADED_IMAGE_HANDLE == handle) {
+        return nullptr;
+    }
+    
+    auto image_it = images.find(handle);
+    if (images.end() == image_it) {
+        return nullptr;
+    }
+    return &image_it->second;
 }
 
 

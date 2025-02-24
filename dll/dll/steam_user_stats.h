@@ -58,6 +58,8 @@ struct achievement_trigger {
 };
 
 class Steam_User_Stats :
+public ISteamUserStats001,
+public ISteamUserStats002,
 public ISteamUserStats003,
 public ISteamUserStats004,
 public ISteamUserStats005,
@@ -67,10 +69,11 @@ public ISteamUserStats008,
 public ISteamUserStats009,
 public ISteamUserStats010,
 public ISteamUserStats011,
+public ISteamUserStats012,
 public ISteamUserStats
 {
 public:
-    static constexpr auto achievements_user_file = "achievements.json";
+    static constexpr const auto achievements_user_file = "achievements.json";
 
 private:
     template<typename T>
@@ -94,6 +97,8 @@ private:
     nlohmann::json defined_achievements{};
     nlohmann::json user_achievements{};
     std::vector<std::string> sorted_achievement_names{};
+    size_t last_loaded_ach_icon{};
+
     std::map<std::string, int32> stats_cache_int{};
     std::map<std::string, float> stats_cache_float{};
 
@@ -108,6 +113,8 @@ private:
     void load_achievements_db();
     void load_achievements();
     void save_achievements();
+
+    int load_ach_icon(nlohmann::json &defined_ach, bool achieved);
 
     nlohmann::detail::iter_impl<nlohmann::json> defined_achievements_find(const std::string &key);
     std::string get_value_for_language(const nlohmann::json &json, std::string_view key, std::string_view language);
@@ -132,6 +139,7 @@ private:
     InternalSetResult<bool> clear_achievement_internal( const char *pchName );
 
     void send_updated_stats();
+    void load_achievements_icons();
     void steam_run_callback();
 
     // requests from server
@@ -207,7 +215,9 @@ public:
     // specified achievement.
     int GetAchievementIcon( const char *pchName );
 
-    std::string get_achievement_icon_name( const char *pchName, bool pbAchieved );
+    int get_achievement_icon_handle( const std::string &ach_name, bool pbAchieved, bool force_load = false );
+
+    std::string get_achievement_icon_name( const char *pchName, bool achieved );
 
 
     // Get general attributes for an achievement. Accepts the following keys:
@@ -395,6 +405,31 @@ public:
     bool GetAchievementProgressLimits( const char *pchName, int32 *pnMinProgress, int32 *pnMaxProgress );
 
     bool GetAchievementProgressLimits( const char *pchName, float *pfMinProgress, float *pfMaxProgress );
+
+    // old interface version
+    uint32 GetNumStats( CGameID nGameID );
+    const char *GetStatName( CGameID nGameID, uint32 iStat );
+    ESteamUserStatType GetStatType( CGameID nGameID, const char *pchName );
+    uint32 GetNumAchievements( CGameID nGameID );
+    const char *GetAchievementName( CGameID nGameID, uint32 iAchievement );
+    uint32 GetNumGroupAchievements( CGameID nGameID );
+    const char *GetGroupAchievementName( CGameID nGameID, uint32 iAchievement );
+    bool RequestCurrentStats( CGameID nGameID );
+    bool GetStat( CGameID nGameID, const char *pchName, int32 *pData );
+    bool GetStat( CGameID nGameID, const char *pchName, float *pData );
+    bool SetStat( CGameID nGameID, const char *pchName, int32 nData );
+    bool SetStat( CGameID nGameID, const char *pchName, float fData );
+    bool UpdateAvgRateStat( CGameID nGameID, const char *pchName, float flCountThisSession, double dSessionLength );
+    bool GetAchievement( CGameID nGameID, const char *pchName, bool *pbAchieved );
+    bool GetGroupAchievement( CGameID nGameID, const char *pchName, bool *pbAchieved );
+    bool SetAchievement( CGameID nGameID, const char *pchName );
+    bool SetGroupAchievement( CGameID nGameID, const char *pchName );
+    bool StoreStats( CGameID nGameID );
+    bool ClearAchievement( CGameID nGameID, const char *pchName );
+    bool ClearGroupAchievement( CGameID nGameID, const char *pchName );
+    int GetAchievementIcon( CGameID nGameID, const char *pchName );
+    const char *GetAchievementDisplayAttribute( CGameID nGameID, const char *pchName, const char *pchKey );
+    bool IndicateAchievementProgress( CGameID nGameID, const char *pchName, uint32 nCurProgress, uint32 nMaxProgress );
 
 };
 

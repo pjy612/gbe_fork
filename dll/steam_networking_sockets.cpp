@@ -195,7 +195,7 @@ void Steam_Networking_Sockets::set_steamnetconnectioninfo(std::map<HSteamNetConn
     pInfo->m_eState = convert_status(connect_socket->second.status);
     pInfo->m_eEndReason = 0; //TODO
     pInfo->m_szEndDebug[0] = 0;
-    sprintf(pInfo->m_szConnectionDescription, "%u", connect_socket->first);
+    snprintf(pInfo->m_szConnectionDescription, sizeof(pInfo->m_szConnectionDescription), "%u", connect_socket->first);
 
     //Note some games might not allocate a struct the whole size of SteamNetConnectionInfo_t when calling GetConnectionInfo
     //keep this in mind in future interface updates
@@ -923,7 +923,7 @@ bool Steam_Networking_Sockets::GetConnectionInfo( HSteamNetConnection hConn, Ste
 /// - k_EResultInvalidParam - nLanes is bad
 EResult Steam_Networking_Sockets::GetConnectionRealTimeStatus( HSteamNetConnection hConn, SteamNetConnectionRealTimeStatus_t *pStatus, int nLanes, SteamNetConnectionRealTimeLaneStatus_t *pLanes )
 {
-    PRINT_DEBUG("%s %u %p %i %p", __FUNCTION__, hConn, pStatus, nLanes, pLanes);
+    PRINT_DEBUG("%u %p %i %p", hConn, pStatus, nLanes, pLanes);
     std::lock_guard<std::recursive_mutex> lock(global_mutex);
     auto connect_socket = sbcs->connect_sockets.find(hConn);
     if (connect_socket == sbcs->connect_sockets.end()) return k_EResultNoConnection;
@@ -1004,10 +1004,19 @@ bool Steam_Networking_Sockets::GetConnectionInfo( HSteamNetConnection hConn, Ste
 bool Steam_Networking_Sockets::GetQuickConnectionStatus( HSteamNetConnection hConn, SteamNetworkingQuickConnectionStatus *pStats )
 {
     PRINT_DEBUG_ENTRY();
-    if (!pStats)
-        return false;
-
-    return GetConnectionRealTimeStatus(hConn, pStats, 0, NULL) == k_EResultOK;
+    // based on reversing the vftable returned from original steamclient64.dll
+    /*
+    ...
+    xor     r9d, r9d                                 // int nLanes = 0
+    mov     qword ptr ss:[rsp+0x20], 0x0             // SteamNetConnectionRealTimeLaneStatus_t *pLanes = nullptr
+    ...
+    call    qword ptr ds:[rax+0x80]                  // call GetConnectionRealTimeStatus(hConn, pStatus, nLanes, pLanes)
+    test    eax, eax
+    setne   al                                       if (eax !=0) { al=1 } else { al=0 }
+    ...
+    ret     
+    */
+    return GetConnectionRealTimeStatus(hConn, pStats, 0, NULL) != k_EResultNone;
 }
 
 

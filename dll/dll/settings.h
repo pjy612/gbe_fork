@@ -165,6 +165,16 @@ struct Overlay_Appearance {
     float element_active_b = -1.0f;
     float element_active_a = -1.0f;
 
+    float stats_background_r = 0.0f;
+    float stats_background_g = 0.0f;
+    float stats_background_b = 0.0f;
+    float stats_background_a = 0.6f;
+
+    float stats_text_r = 0.8f;
+    float stats_text_g = 0.7f;
+    float stats_text_b = 0.0f;
+    float stats_text_a = 1.0f;
+
     NotificationPosition ach_earned_pos = NotificationPosition::bot_right; // achievement earned
     NotificationPosition invite_pos = default_pos; // lobby/game invitation
     NotificationPosition chat_msg_pos = NotificationPosition::top_center; // chat message from a friend
@@ -208,11 +218,16 @@ private:
     std::map<std::string, Leaderboard_config> leaderboards{};
     std::map<std::string, Stat_config> stats{};
 
+    std::map<size_t, struct Image_Data> images{};
+
     //supported languages
     std::set<std::string> supported_languages_set{};
     std::string supported_languages{};
 
 public:
+    constexpr const static int INVALID_IMAGE_HANDLE = 0;
+    constexpr const static int UNLOADED_IMAGE_HANDLE = -1;
+
     //Depots
     std::vector<DepotId_t> depots{};
 
@@ -247,9 +262,19 @@ public:
     // allow stats not defined by the user?
     bool allow_unknown_stats = false;
 
+    // whether to enable the functionality which reports an achievement progress for stats that are tied to achievements
+    // only used internally for a stat that's tied to an achievement, the normal achievement progress requests made by the game are not impacted
+    bool stat_achievement_progress_functionality = true;
     // when a stat that's tied to an achievement gets a new value, should the emu save that progress only if it's higher?
     // the stat itself is always saved regardless of that flag, only affects the achievement progress
     bool save_only_higher_stat_achievement_progress = true;
+    // the emulator loads the achievements icons is memory mainly for `ISteamUserStats::GetAchievementIcon()`
+    // this defines how many icons to load each iteration when the periodic callback in `Steam_User_Stats` is triggered
+    // or when the app calls `SteamAPI_RunCallbacks()`
+    // -1 == functionality disabled
+    // 0  == load icons only when they're requested
+    // >0 == load icons in the background as mentioned above
+    int paginated_achievements_icons = 10;
 
     // bypass to make SetAchievement() always return true, prevent some games from breaking
     bool achievement_bypass = false;
@@ -261,8 +286,6 @@ public:
 
     // enable owning Steam Applications IDs (mostly builtin apps + dedicated servers)
     bool enable_builtin_preowned_ids = false;
-
-    std::map<int, struct Image_Data> images{};
 
     //subscribed lobby/group ids
     std::set<uint64> subscribed_groups{};
@@ -292,6 +315,9 @@ public:
     // synchronize user stats/achievements with game servers as soon as possible instead of caching them.
     bool immediate_gameserver_stats = false;
 
+    // steam_game_stats
+    std::string steam_game_stats_reports_dir{};
+
     //overlay
     bool disable_overlay = true;
     int overlay_hook_delay_sec = 0; // "Saints Row (2022)" needs a lot of time to initialize, otherwise detection will fail
@@ -299,10 +325,15 @@ public:
     bool disable_overlay_achievement_notification = false;
     bool disable_overlay_friend_notification = false;
     bool disable_overlay_achievement_progress = false;
+    unsigned overlay_fps_avg_window = 10;
+    float overlay_stats_pos_x = 0.0f;
+    float overlay_stats_pos_y = 0.0f;
     //warn people who use local save
     bool overlay_warn_local_save = false;
     //disable overlay warning for local save
     bool disable_overlay_warning_local_save = false;
+    // should the overlay upload icons to the GPU and display them
+    bool overlay_upload_achs_icons_to_gpu = true;
     //disable overlay warning for bad app ID (= 0)
     bool disable_overlay_warning_bad_appid = false;
     // disable all overlay warnings
@@ -312,6 +343,10 @@ public:
     bool auto_accept_any_overlay_invites = false;
     // list of user steam IDs to auto-accept invites from
     std::set<uint64_t> auto_accept_overlay_invites_friends{};
+    bool overlay_always_show_user_info = false;
+    bool overlay_always_show_fps = false;
+    bool overlay_always_show_frametime = false;
+    bool overlay_always_show_playtime = false;
 
 
 #ifdef LOBBY_CONNECT
@@ -343,6 +378,7 @@ public:
     CSteamID get_lobby();
 
     bool is_offline();
+    void set_offline(bool offline);
 
     uint16 get_port();
     void set_port(uint16 port);
@@ -380,6 +416,7 @@ public:
 
     //images
     int add_image(const std::string &data, uint32 width, uint32 height);
+    Image_Data* get_image(int handle);
 
     // overlay auto accept stuff
     void acceptAnyOverlayInvites(bool value);

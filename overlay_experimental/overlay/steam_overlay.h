@@ -12,6 +12,7 @@
 #include <memory>
 #include "InGameOverlay/RendererHook.h"
 #include "InGameOverlay/ImGui/imgui.h"
+#include "overlay/steam_overlay_stats.h"
 
 static constexpr size_t max_chat_len = 768;
 
@@ -63,24 +64,18 @@ enum class notification_type
 
 struct Overlay_Achievement
 {
-    // avoids spam loading on failure
-    constexpr const static int ICON_LOAD_MAX_TRIALS = 3;
-
-    std::string name{};
-    std::string title{};
-    std::string description{};
-    std::string icon_name{};
-    std::string icon_gray_name{};
+    std::string name{}; // internal schema name
+    std::string title{}; // displayName
+    std::string description{}; // description
     uint32 progress{};
     uint32 max_progress{};
     bool hidden{};
     bool achieved{};
     uint32 unlock_time{};
-    std::weak_ptr<uint64_t> icon{};
-    std::weak_ptr<uint64_t> icon_gray{};
-
-    uint8_t icon_load_trials = ICON_LOAD_MAX_TRIALS;
-    uint8_t icon_gray_load_trials = ICON_LOAD_MAX_TRIALS;
+    InGameOverlay::RendererResource_t* icon{};
+    InGameOverlay::RendererResource_t* icon_gray{};
+    int icon_handle = Settings::UNLOADED_IMAGE_HANDLE;
+    int icon_gray_handle = Settings::UNLOADED_IMAGE_HANDLE;
 };
 
 struct Notification
@@ -107,8 +102,6 @@ struct NotificationsCoords
 class Steam_Overlay
 {
     constexpr static const char ACH_SOUNDS_FOLDER[] = "sounds";
-    constexpr static const char ACH_FALLBACK_DIR[] = "achievement_images";
-
     constexpr static const int renderer_detector_polling_ms = 100;
 
     class Settings* settings;
@@ -117,6 +110,7 @@ class Steam_Overlay
     class SteamCallBacks* callbacks;
     class RunEveryRunCB* run_every_runcb;
     class Networking* network;
+    class Steam_Overlay_Stats stats;
 
     // friend id, show client window (to chat and accept invite maybe)
     std::map<Friend, friend_window_state, Friend_Less> friends{};
@@ -129,6 +123,7 @@ class Steam_Overlay
     std::string show_url{};
 
     std::vector<Overlay_Achievement> achievements{};
+    size_t last_loaded_ach_icon{};
     
     bool show_overlay = false;
     bool show_user_info = false;
@@ -159,7 +154,6 @@ class Steam_Overlay
 
     // some stuff has to be initialized once the renderer hook is ready
     std::atomic<bool> late_init_imgui = false;
-    bool late_init_ach_icons = false;
 
     // changed each time a notification is posted or overlay is shown/hidden
     std::atomic_uint32_t renderer_frame_processing_requests = 0;
@@ -194,12 +188,6 @@ class Steam_Overlay
     Steam_Overlay& operator=(Steam_Overlay const&) = delete;
     Steam_Overlay& operator=(Steam_Overlay&&) = delete;
 
-    static void overlay_run_callback(void* object);
-    static void overlay_networking_callback(void* object, Common_Message* msg);
-    
-    bool is_friend_joinable(std::pair<const Friend, friend_window_state> &f);
-    bool got_lobby();
-
     bool submit_notification(
         notification_type type,
         const std::string &msg,
@@ -223,9 +211,7 @@ class Steam_Overlay
     void add_ach_progressbar(const Overlay_Achievement &ach);
     ImVec4 get_notification_bg_rgba_safe();
     void build_notifications(float width, float height);
-    // invite a single friend
-    void invite_friend(uint64 friend_id, class Steam_Friends* steamFriends, class Steam_Matchmaking* steamMatchmaking);
-
+    
     void request_renderer_detector();
     void set_renderer_hook_timeout();
     void cleanup_renderer_hook();
@@ -235,7 +221,6 @@ class Steam_Overlay
     void create_fonts();
     void load_audio();
     void load_achievements_data();
-    void initial_load_achievements_icons();
 
     void overlay_state_hook(bool ready);
     void allow_renderer_frame_processing(bool state, bool cleaning_up_overlay = false);
@@ -249,14 +234,27 @@ class Steam_Overlay
 
     bool open_overlay_hook(bool toggle);
 
-    bool try_load_ach_icon(Overlay_Achievement &ach, bool achieved);
+    bool try_load_ach_icon(Overlay_Achievement &ach, bool achieved, bool upload_new_icon_to_gpu);
 
     void overlay_render_proc();
+    void load_next_ach_icon();
     uint32 apply_global_style_color();
     void render_main_window();
-    void networking_msg_received(Common_Message* msg);
+
+
+    void steam_run_callback_update_my_lobby();
+    bool is_friend_joinable(std::pair<const Friend, friend_window_state> &f);
+    // invite a single friend
+    void invite_friend(uint64 friend_id, class Steam_Friends* steamFriends, class Steam_Matchmaking* steamMatchmaking);
+    void steam_run_callback_friends_actions();
     void steam_run_callback();
 
+    void networking_msg_received(Common_Message* msg);
+
+
+    static void overlay_run_callback(void* object);
+    static void overlay_networking_callback(void* object, Common_Message* msg);
+    
 public:
     Steam_Overlay(Settings* settings, Local_Storage *local_storage, SteamCallResults* callback_results, SteamCallBacks* callbacks, RunEveryRunCB* run_every_runcb, Networking *network);
 
